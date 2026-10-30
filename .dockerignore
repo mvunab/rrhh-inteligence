@@ -1,0 +1,10 @@
+.git
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+chroma_db/
+data/rrhh_workspace/
+data/*.db
+.venv/
+venv/

@@ -1,0 +1,43 @@
+# Manifiesto del agente (misma idea que en las Semanas 2-5: declarativo + ejecutable)
+name: agente-liquidaciones
+version: 0.1.0
+description: >
+  Explica los descuentos de una liquidación de sueldo y detecta diferencias contra el contrato
+  y las reglas de cálculo. Caso didáctico de la Clínica Traumatología Cóndor (ficticia).
+owner: curso CINF110 · Agentes de IA
+instructions: agent/agent.md
+contract:
+  output_schema: agent/output.schema.json   # generado desde harness/schemas.py
+  on_invalid_output: reintentar_una_vez     # reparar el JSON; si falla, mostrar el texto crudo
+model:
+  provider: ollama            # ollama | unab | mock  (variable LLM_PROVIDER)
+  name: llama3.1:8b           # debe soportar tool calling (variable LLM_MODEL)
+  temperature: 0
+embeddings:
+  provider: ollama            # ollama | mock  (variable EMBEDDINGS_PROVIDER)
+  name: nomic-embed-text-v2-moe
+retrieval:
+  store: chroma
+  chunking: "un chunk por cláusula/sección (700 caracteres máx., 100 de solape)"
+  top_k: 4
+  filter: "worker_id == sesión OR worker_id == ALL"   # control de acceso en el retriever
+tools:
+  - name: obtener_liquidacion
+    kind: datos
+    scope: trabajador autenticado
+  - name: calcular_descuentos_esperados
+    kind: cálculo determinista
+    scope: trabajador autenticado
+  - name: consultar_parametros
+    kind: cálculo determinista
+    scope: público
+  - name: buscar_en_documentos
+    kind: rag
+    scope: documentos del trabajador + compartidos
+limits:
+  max_steps: 8
+guardrails:
+  - "El id del trabajador NO es parámetro de ninguna tool: viene de la sesión."
+  - "Las fuentes citadas deben haber sido recuperadas en la misma ejecución (grounding check)."
+  - "El agente explica y marca diferencias; no certifica cumplimiento legal."
+data_classification: "Datos personales sensibles (remuneraciones). Usar solo datos sintéticos en clase."

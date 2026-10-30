@@ -1,0 +1,70 @@
+[
+  {
+    "worker_id": "W001",
+    "nombre": "Camila Rojas Pizarro",
+    "cargo": "Kinesióloga",
+    "tipo_contrato": "indefinido",
+    "fecha_inicio": "2023-03-01",
+    "fecha_termino": null,
+    "afp": "Habitat",
+    "salud": "Fonasa",
+    "sueldo_base": 1000000,
+    "colacion": 50000,
+    "movilizacion": 40000,
+    "asignacion_turno": 0,
+    "bono": {
+      "nombre": "Bono de productividad",
+      "monto": 150000,
+      "meta_atenciones": 120
+    },
+    "jornada": "44 horas semanales, de lunes a viernes"
+  },
+  {
+    "worker_id": "W002",
+    "nombre": "Tomás Aguilera Soto",
+    "cargo": "Técnico paramédico",
+    "tipo_contrato": "indefinido",
+    "fecha_inicio": "2022-08-15",
+    "fecha_termino": null,
+    "afp": "Modelo",
+    "salud": "Fonasa",
+    "sueldo_base": 700000,
+    "colacion": 45000,
+    "movilizacion": 40000,
+    "asignacion_turno": 80000,
+    "bono": null,
+    "jornada": "44 horas semanales, en régimen de turnos rotativos"
+  },
+  {
+    "worker_id": "W003",
+    "nombre": "Valentina Cortés Vera",
+    "cargo": "Médica traumatóloga",
+    "tipo_contrato": "indefinido",
+    "fecha_inicio": "2021-01-04",
+    "fecha_termino": null,
+    "afp": "Cuprum",
+    "salud": "Fonasa",
+    "sueldo_base": 4500000,
+    "colacion": 60000,
+    "movilizacion": 0,
+    "asignacion_turno": 0,
+    "bono": null,
+    "jornada": "44 horas semanales, de lunes a viernes"
+  },
+  {
+    "worker_id": "W004",
+    "nombre": "Diego Fuentes Lagos",
+    "cargo": "Ejecutivo de admisión",
+    "tipo_contrato": "plazo_fijo",
+    "fecha_inicio": "2026-07-01",
+    "fecha_termino": "2026-12-31",
+    "afp": "Uno",
+    "salud": "Fonasa",
+    "sueldo_base": 620000,
+    "colacion": 40000,
+    "movilizacion": 35000,
+    "asignacion_turno": 0,
+    "bono": null,
+    "jornada": "44 horas semanales, de lunes a viernes"
+  }
+]

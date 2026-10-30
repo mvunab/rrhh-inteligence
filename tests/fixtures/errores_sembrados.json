@@ -1,0 +1,34 @@
+{
+  "periodo": "2026-09",
+  "W001": {
+    "lineas_con_diferencia": [
+      "afp"
+    ],
+    "derivadas": [
+      "impuesto_unico"
+    ],
+    "descripcion": "AFP ProVida en vez de Habitat"
+  },
+  "W002": {
+    "lineas_con_diferencia": [],
+    "derivadas": [],
+    "descripcion": "Sin errores"
+  },
+  "W003": {
+    "lineas_con_diferencia": [
+      "afp",
+      "salud"
+    ],
+    "derivadas": [
+      "impuesto_unico"
+    ],
+    "descripcion": "AFP y salud sin tope imponible"
+  },
+  "W004": {
+    "lineas_con_diferencia": [
+      "seguro_cesantia"
+    ],
+    "derivadas": [],
+    "descripcion": "Seguro de cesantía en contrato a plazo fijo"
+  }
+}

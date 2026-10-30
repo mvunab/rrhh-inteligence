@@ -1,0 +1,494 @@
+[
+  {
+    "worker_id": "W001",
+    "periodo": "2026-08",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 1000000
+      },
+      {
+        "concepto": "Bono de productividad",
+        "monto": 150000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 219115
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 50000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 40000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Habitat",
+        "institucion": "Habitat",
+        "base": 1369115,
+        "tasa": 0.1127,
+        "monto": 154299
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 1369115,
+        "tasa": 0.07,
+        "monto": 95838
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 1369115,
+        "tasa": 0.006,
+        "monto": 8215
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 1110763,
+        "tasa": null,
+        "monto": 5469
+      }
+    ],
+    "total_haberes": 1459115,
+    "total_descuentos": 263821,
+    "liquido_a_pagar": 1195294,
+    "datos_variables": {
+      "atenciones_mes": 128
+    }
+  },
+  {
+    "worker_id": "W001",
+    "periodo": "2026-09",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 1000000
+      },
+      {
+        "concepto": "Bono de productividad",
+        "monto": 0
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 219115
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 50000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 40000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP ProVida",
+        "institucion": "ProVida",
+        "base": 1219115,
+        "tasa": 0.1145,
+        "monto": 139589
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 1219115,
+        "tasa": 0.07,
+        "monto": 85338
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 1219115,
+        "tasa": 0.006,
+        "monto": 7315
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 986873,
+        "tasa": null,
+        "monto": 513
+      }
+    ],
+    "total_haberes": 1309115,
+    "total_descuentos": 232755,
+    "liquido_a_pagar": 1076360,
+    "datos_variables": {
+      "atenciones_mes": 112
+    }
+  },
+  {
+    "worker_id": "W002",
+    "periodo": "2026-08",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 700000
+      },
+      {
+        "concepto": "Asignación de turno",
+        "monto": 80000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 195000
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 45000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 40000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Modelo",
+        "institucion": "Modelo",
+        "base": 975000,
+        "tasa": 0.1058,
+        "monto": 103155
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 975000,
+        "tasa": 0.07,
+        "monto": 68250
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 975000,
+        "tasa": 0.006,
+        "monto": 5850
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 797745,
+        "tasa": null,
+        "monto": 0
+      }
+    ],
+    "total_haberes": 1060000,
+    "total_descuentos": 177255,
+    "liquido_a_pagar": 882745,
+    "datos_variables": {}
+  },
+  {
+    "worker_id": "W002",
+    "periodo": "2026-09",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 700000
+      },
+      {
+        "concepto": "Asignación de turno",
+        "monto": 80000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 195000
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 45000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 40000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Modelo",
+        "institucion": "Modelo",
+        "base": 975000,
+        "tasa": 0.1058,
+        "monto": 103155
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 975000,
+        "tasa": 0.07,
+        "monto": 68250
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 975000,
+        "tasa": 0.006,
+        "monto": 5850
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 797745,
+        "tasa": null,
+        "monto": 0
+      }
+    ],
+    "total_haberes": 1060000,
+    "total_descuentos": 177255,
+    "liquido_a_pagar": 882745,
+    "datos_variables": {}
+  },
+  {
+    "worker_id": "W003",
+    "periodo": "2026-08",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 4500000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 219115
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 60000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Cuprum",
+        "institucion": "Cuprum",
+        "base": 3695148,
+        "tasa": 0.1144,
+        "monto": 422725
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 3695148,
+        "tasa": 0.07,
+        "monto": 258660
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 4719115,
+        "tasa": 0.006,
+        "monto": 28315
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 4009415,
+        "tasa": null,
+        "monto": 217313
+      }
+    ],
+    "total_haberes": 4779115,
+    "total_descuentos": 927013,
+    "liquido_a_pagar": 3852102,
+    "datos_variables": {}
+  },
+  {
+    "worker_id": "W003",
+    "periodo": "2026-09",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 4500000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 219115
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 60000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Cuprum",
+        "institucion": "Cuprum",
+        "base": 4719115,
+        "tasa": 0.1144,
+        "monto": 539867
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 4719115,
+        "tasa": 0.07,
+        "monto": 330338
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 4719115,
+        "tasa": 0.006,
+        "monto": 28315
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 3820595,
+        "tasa": null,
+        "monto": 191822
+      }
+    ],
+    "total_haberes": 4779115,
+    "total_descuentos": 1090342,
+    "liquido_a_pagar": 3688773,
+    "datos_variables": {}
+  },
+  {
+    "worker_id": "W004",
+    "periodo": "2026-08",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 620000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 155000
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 40000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 35000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Uno",
+        "institucion": "Uno",
+        "base": 775000,
+        "tasa": 0.1046,
+        "monto": 81065
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 775000,
+        "tasa": 0.07,
+        "monto": 54250
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 775000,
+        "tasa": 0.0,
+        "monto": 0
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 639685,
+        "tasa": null,
+        "monto": 0
+      }
+    ],
+    "total_haberes": 850000,
+    "total_descuentos": 135315,
+    "liquido_a_pagar": 714685,
+    "datos_variables": {}
+  },
+  {
+    "worker_id": "W004",
+    "periodo": "2026-09",
+    "dias_trabajados": 30,
+    "haberes_imponibles": [
+      {
+        "concepto": "Sueldo base",
+        "monto": 620000
+      },
+      {
+        "concepto": "Gratificación legal Art. 50",
+        "monto": 155000
+      }
+    ],
+    "haberes_no_imponibles": [
+      {
+        "concepto": "Asignación de colación",
+        "monto": 40000
+      },
+      {
+        "concepto": "Asignación de movilización",
+        "monto": 35000
+      }
+    ],
+    "descuentos_legales": [
+      {
+        "codigo": "afp",
+        "concepto": "AFP Uno",
+        "institucion": "Uno",
+        "base": 775000,
+        "tasa": 0.1046,
+        "monto": 81065
+      },
+      {
+        "codigo": "salud",
+        "concepto": "Salud (Fonasa 7%)",
+        "base": 775000,
+        "tasa": 0.07,
+        "monto": 54250
+      },
+      {
+        "codigo": "seguro_cesantia",
+        "concepto": "Seguro de cesantía",
+        "base": 775000,
+        "tasa": 0.006,
+        "monto": 4650
+      },
+      {
+        "codigo": "impuesto_unico",
+        "concepto": "Impuesto único 2ª categoría",
+        "base": 635035,
+        "tasa": null,
+        "monto": 0
+      }
+    ],
+    "total_haberes": 850000,
+    "total_descuentos": 139965,
+    "liquido_a_pagar": 710035,
+    "datos_variables": {}
+  }
+]

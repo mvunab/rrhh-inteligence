@@ -1,0 +1,67 @@
+{
+  "_nota": "Parametros de remuneraciones para el EJERCICIO DIDACTICO del curso. Verificados el 2026-10-07. NO sustituyen asesoria legal ni la normativa vigente: antes de usar en produccion, volver a verificar cada valor en su fuente oficial.",
+  "fecha_verificacion": "2026-10-07",
+  "periodo_referencia": "2026-09",
+  "uf": {
+    "valor": 41057.20,
+    "fecha": "2026-09-30",
+    "fuente": "mindicador.cl (serie UF Banco Central), consultado 2026-10-07",
+    "criterio": "Simplificacion didactica: se usa la UF del ultimo dia del mes de la remuneracion para convertir los topes en UF a pesos. Verificar el criterio exacto con la Superintendencia de Pensiones."
+  },
+  "utm": {
+    "valor": 72151,
+    "periodo": "2026-10",
+    "fuente": "SII - Circular N 37 de 2026 (tabla IUSC octubre 2026)"
+  },
+  "ingreso_minimo": {
+    "valor": 553553,
+    "vigente_desde": "2026-05-01",
+    "fuente": "KPMG Chile, Alerta Laboral 22-jun-2026 (reajuste con aplicacion retroactiva al 1-may-2026). Otras fuentes secundarias lo fechan distinto: verificar."
+  },
+  "cotizaciones": {
+    "afp_obligatoria": 0.10,
+    "salud": 0.07,
+    "seguro_cesantia_trabajador": {
+      "indefinido": 0.006,
+      "plazo_fijo": 0.0
+    },
+    "fuente": "DL 3.500 (AFP), Ley 19.728 (seguro de cesantia: indefinido 0,6% trabajador + 2,4% empleador; plazo fijo 3% solo empleador). Resumen en hacecuentas.cl/cl/datos-sueldo-chile-2026."
+  },
+  "topes_uf": {
+    "afp_salud": 90.0,
+    "seguro_cesantia": 135.2,
+    "vigente_desde": "remuneraciones de febrero 2026",
+    "fuente": "Superintendencia de Pensiones, via redimin.cl (reajuste anual por indice real de remuneraciones)"
+  },
+  "comisiones_afp": {
+    "Uno": 0.0046,
+    "Modelo": 0.0058,
+    "PlanVital": 0.0116,
+    "Habitat": 0.0127,
+    "Capital": 0.0144,
+    "Cuprum": 0.0144,
+    "ProVida": 0.0145,
+    "fecha": "2026-04",
+    "fuente": "Superintendencia de Pensiones, via monedario.cl/calculadoras/comisiones-afp (abril 2026). Las comisiones cambian: verificar el mes de la liquidacion."
+  },
+  "gratificacion": {
+    "porcentaje": 0.25,
+    "tope_imm_anual": 4.75,
+    "fuente": "Codigo del Trabajo, art. 50 (25% de lo devengado con tope de 4,75 ingresos minimos mensuales al ano, pagado en doceavos)."
+  },
+  "impuesto_unico": {
+    "fuente": "SII - Circular N 37 de 2026, tabla mensual octubre 2026 (UTM $72.151)",
+    "exento_hasta_utm": 13.5,
+    "tramos": [
+      {"desde": 0,           "hasta": 974038.50,   "factor": 0.0,   "rebaja": 0.0},
+      {"desde": 974038.50,   "hasta": 2164530.00,  "factor": 0.04,  "rebaja": 38961.54},
+      {"desde": 2164530.00,  "hasta": 3607550.00,  "factor": 0.08,  "rebaja": 125542.74},
+      {"desde": 3607550.00,  "hasta": 5050570.00,  "factor": 0.135, "rebaja": 323957.99},
+      {"desde": 5050570.00,  "hasta": 6493590.00,  "factor": 0.23,  "rebaja": 803762.14},
+      {"desde": 6493590.00,  "hasta": 8658120.00,  "factor": 0.304, "rebaja": 1284287.80},
+      {"desde": 8658120.00,  "hasta": 22366810.00, "factor": 0.35,  "rebaja": 1682561.32},
+      {"desde": 22366810.00, "hasta": null,        "factor": 0.40,  "rebaja": 2800901.82}
+    ]
+  },
+  "tolerancia_pesos": 1
+}

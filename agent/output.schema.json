@@ -1,0 +1,151 @@
+{
+  "$defs": {
+    "Fuente": {
+      "properties": {
+        "tipo": {
+          "description": "'documento' si viene de un trozo recuperado de Chroma; 'herramienta' si viene de una tool.",
+          "enum": [
+            "documento",
+            "herramienta"
+          ],
+          "title": "Tipo",
+          "type": "string"
+        },
+        "referencia": {
+          "description": "Para documento: el id del trozo (ej. contrato_W001.md#06). Para herramienta: su nombre.",
+          "title": "Referencia",
+          "type": "string"
+        },
+        "detalle": {
+          "default": "",
+          "description": "Frase corta de que dato salio de esa fuente.",
+          "title": "Detalle",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tipo",
+        "referencia"
+      ],
+      "title": "Fuente",
+      "type": "object"
+    },
+    "Hallazgo": {
+      "properties": {
+        "severidad": {
+          "enum": [
+            "info",
+            "revisar",
+            "critico"
+          ],
+          "title": "Severidad",
+          "type": "string"
+        },
+        "descripcion": {
+          "title": "Descripcion",
+          "type": "string"
+        },
+        "monto_diferencia": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pagado menos esperado, en pesos (positivo = se descuento de mas).",
+          "title": "Monto Diferencia"
+        },
+        "recomendacion": {
+          "default": "",
+          "title": "Recomendacion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "severidad",
+        "descripcion"
+      ],
+      "title": "Hallazgo",
+      "type": "object"
+    },
+    "LineaDescuento": {
+      "properties": {
+        "concepto": {
+          "title": "Concepto",
+          "type": "string"
+        },
+        "monto": {
+          "description": "Monto en pesos chilenos, tal como aparece en la liquidacion.",
+          "title": "Monto",
+          "type": "integer"
+        },
+        "explicacion": {
+          "description": "Por que se descuenta, en lenguaje simple para el trabajador.",
+          "title": "Explicacion",
+          "type": "string"
+        },
+        "fuente": {
+          "default": "",
+          "description": "Referencia a la fuente que respalda la explicacion.",
+          "title": "Fuente",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concepto",
+        "monto",
+        "explicacion"
+      ],
+      "title": "LineaDescuento",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "respuesta": {
+      "description": "Respuesta directa a la pregunta, en espanol claro.",
+      "title": "Respuesta",
+      "type": "string"
+    },
+    "descuentos": {
+      "items": {
+        "$ref": "#/$defs/LineaDescuento"
+      },
+      "title": "Descuentos",
+      "type": "array"
+    },
+    "hallazgos": {
+      "items": {
+        "$ref": "#/$defs/Hallazgo"
+      },
+      "title": "Hallazgos",
+      "type": "array"
+    },
+    "fuentes": {
+      "items": {
+        "$ref": "#/$defs/Fuente"
+      },
+      "title": "Fuentes",
+      "type": "array"
+    },
+    "requiere_revision_rrhh": {
+      "description": "True si hay diferencias que Recursos Humanos deberia revisar.",
+      "title": "Requiere Revision Rrhh",
+      "type": "boolean"
+    },
+    "fuera_de_alcance": {
+      "default": false,
+      "description": "True si la pregunta no es sobre la liquidacion del trabajador autenticado.",
+      "title": "Fuera De Alcance",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "respuesta",
+    "requiere_revision_rrhh"
+  ],
+  "title": "InformeLiquidacion",
+  "type": "object"
+}
