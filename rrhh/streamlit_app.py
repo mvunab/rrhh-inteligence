@@ -23,7 +23,13 @@ st.set_page_config(page_title="Centro de control · RR.HH.", page_icon="🗂️"
 
 
 def clp(n: int | float | None) -> str:
-    return "—" if n is None else f"${int(n):,}".replace(",", ".")
+    if n is None:
+        return "—"
+    return ("-" if n < 0 else "") + f"${abs(int(n)):,}".replace(",", ".")
+
+
+def _delta(n: int) -> str | None:
+    return None if n == 0 else ("+" if n > 0 else "") + clp(n)
 
 
 _MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -49,20 +55,11 @@ def _llamar(funcion, *args, **kwargs):
 
 _SEV_ETIQUETA = {"critico": "Crítico", "revisar": "Revisar", "sin diferencias": "Sin diferencias"}
 _SEV_COLOR = {"critico": "red", "revisar": "orange", "sin diferencias": "green"}
-_SEV_FONDO = {
-    "Crítico": "background-color: #7f1d1d; color: #fecaca; font-weight: 600",
-    "Revisar": "background-color: #78350f; color: #fde68a; font-weight: 600",
-    "Sin diferencias": "background-color: #14532d; color: #bbf7d0; font-weight: 600",
-}
 _DECISIONES = ("mantener", "corregir", "derivar")
 
 
 def _titulo(texto: str) -> str:
     return texto[:1].upper() + texto[1:] if texto else texto
-
-
-def _nombres() -> dict[str, str]:
-    return {t["worker_id"]: t["nombre"] for t in (_llamar(cliente.trabajadores) or [])}
 
 
 def _filas_seleccionadas(evento) -> list[int]:
@@ -73,61 +70,108 @@ def _filas_seleccionadas(evento) -> list[int]:
     return list(filas or [])
 
 
-def zona_casos() -> None:
-    casos = _llamar(cliente.casos)
-    if casos is None:
-        return
-    if not casos:
-        st.info("No hay casos. Carga una liquidación con diferencias para abrir uno.")
-        return
-    nombres = _nombres()
-    ids = [c["id"] for c in casos]
-    if st.session_state.get("caso_id") not in ids:
-        st.session_state["caso_id"] = ids[0]
-    con_diferencias = sum(1 for c in casos if c.get("hay_diferencias", True))
-    st.caption(f"{len(casos)} casos · {con_diferencias} con diferencias. Haz clic en una fila para abrir el caso.")
+_TIPO = {"diferencia": "Diferencia de cálculo", "revision": "Revisión humana"}
+_TIPO_COLOR = {"diferencia": "red", "revision": "blue"}
+_ORIGEN_FILA = {("trabajador",): "Trabajador", ("sistema",): "Sistema",
+                ("trabajador", "sistema"): "Trabajador y sistema"}
 
-    lista, detalle = st.columns([1, 1.35], gap="large")
+
+def zona_bandeja() -> None:
+    items = _llamar(cliente.bandeja)
+    if items is None:
+        return
+    if not items:
+        st.info("No hay nada que revisar. Aparece aquí cuando el motor encuentra una diferencia al cargar "
+                "una liquidación o cuando un trabajador pide que una persona revise la suya.")
+        return
+    ids = [i["id"] for i in items]
+    if st.session_state.get("item_id") not in ids:
+        st.session_state["item_id"] = ids[0]
+    pendientes = sum(1 for i in items if i["estado"] == "pendiente")
+    st.caption(f"{len(items)} liquidaciones en revisión · {pendientes} pendientes. Una fila por liquidación: "
+               "**Diferencia de cálculo** si el motor o el agente encontraron un monto mal calculado, "
+               "**Revisión humana** si el trabajador solo pidió que una persona lo mire.")
+
+    lista, detalle = st.columns([1.1, 1.35], gap="large")
     with lista:
         tabla = pd.DataFrame([{
-            "Trabajador": nombres.get(c["worker_id"], c["worker_id"]),
-            "Liquidación": mes(c["periodo"]),
-            "Estado": _titulo(c["estado"]),
-            "Severidad": _SEV_ETIQUETA.get(c["severidad"], c["severidad"]),
-            "Diferencia": clp(c["diferencia_total"]),
-        } for c in casos])
+            "Trabajador": i["nombre"],
+            "Área": i["area"],
+            "Liquidación": mes(i["periodo"] or ""),
+            "Tipo": _TIPO[i["tipo"]],
+            "Origen": _ORIGEN_FILA.get(tuple(i["origen"]), "—"),
+            "Estado": _titulo(i["estado"]),
+            "Diferencia": clp(i["diferencia_total"]) if i["tipo"] == "diferencia" else "—",
+        } for i in items])
         evento = st.dataframe(
-            tabla.style.map(lambda valor: _SEV_FONDO.get(valor, ""), subset=["Severidad"]),
-            hide_index=True,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="single-row",
+            tabla.style.map(lambda v: "color: #b91c1c; font-weight: 600" if v == _TIPO["diferencia"] else "",
+                            subset=["Tipo"]),
+            hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row",
             key="bandeja",
         )
         filas = _filas_seleccionadas(evento)
         if filas and filas[0] < len(ids):
-            st.session_state["caso_id"] = ids[filas[0]]
+            st.session_state["item_id"] = ids[filas[0]]
     with detalle:
-        zona_caso(nombres)
+        zona_item(next(i for i in items if i["id"] == st.session_state["item_id"]))
 
 
-def zona_caso(nombres: dict[str, str] | None = None) -> None:
-    caso_id = st.session_state.get("caso_id")
-    if not caso_id:
-        st.info("Elige un caso en la bandeja.")
+def zona_item(item: dict) -> None:
+    st.subheader(item["nombre"])
+    st.caption(f"Liquidación de {mes(item['periodo'] or '')} · {item['area']}")
+    with st.container(horizontal=True):
+        st.badge(_TIPO[item["tipo"]], color=_TIPO_COLOR[item["tipo"]])
+        st.badge(_titulo(item["estado"]), color="orange" if item["estado"] == "pendiente" else "green")
+        if item.get("decision"):
+            st.badge(f"Decisión: {_titulo(item['decision'])}", color="gray")
+
+    zona_pedidos(item)
+    caso = _llamar(cliente.caso, item["caso_id"]) if item.get("caso_id") else None
+    if caso and (caso.get("hay_diferencias") or caso["estado"] != "pendiente"):
+        st.divider()
+        zona_caso(caso)
+    elif item["tipo"] == "revision":
+        st.caption("El motor no encuentra diferencias de cálculo en esta liquidación.")
+
+
+def zona_pedidos(item: dict) -> None:
+    """Lo que el trabajador escribió y la respuesta del analista. Varias solicitudes de la misma
+    liquidación se responden juntas."""
+    solicitudes = item["solicitudes"]
+    if not solicitudes:
+        st.caption("La detectó el sistema al cargar la liquidación. El trabajador no ha pedido revisión.")
         return
-    caso = _llamar(cliente.caso, caso_id)
-    if caso is None:
+    st.markdown("**Lo que pidió el trabajador**")
+    for solicitud in solicitudes:
+        with st.container(border=True):
+            st.caption(f"{solicitud['id']} · {_motivos(solicitud)} · {_titulo(solicitud['estado'])}")
+            for mensaje in solicitud["mensajes"]:
+                with st.chat_message("user"):
+                    st.write(mensaje["texto"])
+            if len(solicitud["mensajes"]) > 1:
+                st.caption(f"{len(solicitud['mensajes'])} mensajes del mismo día sobre el mismo tema, "
+                           "unidos en una solicitud.")
+            with st.expander("Resumen del agente"):
+                st.markdown((solicitud.get("resumen") or "").replace("$", r"\$"))
+            if solicitud["estado"] == "respondida" and solicitud.get("respuesta"):
+                st.success(f"Respondida: {solicitud['respuesta']}")
+
+    abiertas = [s for s in solicitudes if s["estado"] == "pendiente"]
+    if not abiertas:
         return
-    if nombres is None:
-        nombres = _nombres()
-    st.subheader(nombres.get(caso["worker_id"], caso["worker_id"]))
-    st.caption(f"Liquidación de {mes(caso['periodo'])} · {caso['id']}")
-    cifra, sev, estado = st.columns([1.2, 1, 1])
+    with st.form(f"respuesta-{item['id']}"):
+        texto = st.text_area("Respuesta al trabajador", placeholder="Qué revisaste y qué tiene que saber.")
+        if st.form_submit_button("Enviar respuesta", type="primary"):
+            if all(_llamar(cliente.responder_solicitud, s["id"], texto) is not None for s in abiertas):
+                st.rerun()
+
+
+def zona_caso(caso: dict) -> None:
+    st.markdown("**Diferencia de cálculo**")
+    cifra, sev = st.columns([1.2, 1])
     cifra.metric("Diferencia", clp(caso["diferencia_total"]))
     sev.badge(_SEV_ETIQUETA.get(caso["severidad"], caso["severidad"]),
               color=_SEV_COLOR.get(caso["severidad"], "gray"))
-    estado.badge(_titulo(caso["estado"]), color="blue" if caso["estado"] != "pendiente" else "gray")
     if caso.get("reabierto"):
         st.warning("Una carga nueva cambió las diferencias. El caso volvió a pendiente.")
     if not caso.get("hay_diferencias", True):
@@ -169,6 +213,8 @@ def zona_caso(nombres: dict[str, str] | None = None) -> None:
             if _llamar(cliente.explicar, caso["id"]) is not None:
                 st.rerun()
 
+    zona_borrador(caso)
+
     st.markdown("**Decisión**")
     with st.form(f"decision-{caso['id']}"):
         decision = st.radio(
@@ -189,7 +235,82 @@ def zona_caso(nombres: dict[str, str] | None = None) -> None:
                 st.rerun()
 
 
-_ORIGEN = {"base": "Sistema", "migrado": "Sistema", "excel": "Excel", "pdf": "PDF"}
+def zona_borrador(caso: dict) -> None:
+    """Propuesta de liquidación corregida: se genera, el analista la ajusta y la emite."""
+    st.markdown("**Liquidación corregida**")
+    borrador_id = f"B-{caso['worker_id']}-{caso['periodo']}"
+    borrador = next((b for b in (_llamar(cliente.borradores) or []) if b["id"] == borrador_id), None)
+    if borrador is None or (borrador["estado"] == "emitida" and caso.get("hay_diferencias")):
+        st.caption("El motor recalcula la liquidación con la ficha vigente y los parámetros del periodo. "
+                   "Queda como borrador hasta que la emitas.")
+        if st.button("Generar propuesta corregida", key=f"generar-{caso['id']}", type="primary"):
+            if _llamar(cliente.generar_borrador, caso["worker_id"], caso["periodo"]) is not None:
+                st.rerun()
+        return
+
+    emitida = borrador["estado"] == "emitida"
+    original, propuesta = borrador["original"], borrador["propuesta"]
+    antes, despues, estado = st.columns([1, 1, 1])
+    antes.metric("Líquido emitido", clp(original["liquido_a_pagar"]))
+    despues.metric("Líquido propuesto", clp(propuesta["liquido_a_pagar"]),
+                   delta=_delta(propuesta["liquido_a_pagar"] - original["liquido_a_pagar"]))
+    estado.badge("Emitida" if emitida else f"Borrador v{borrador.get('version', 1)}",
+                 color="green" if emitida else "orange")
+    if borrador.get("ajustes"):
+        st.dataframe([{
+            "Concepto": a["concepto"], "Emitido": clp(a["emitido"]), "Propuesto": clp(a["propuesto"]),
+            "Diferencia": clp(a["diferencia"]), "Motivo": a["motivo"],
+        } for a in borrador["ajustes"]], hide_index=True, use_container_width=True)
+    else:
+        st.caption("El recálculo no cambia ningún monto.")
+
+    pdf = _llamar(cliente.pdf_borrador, borrador["id"])
+    if pdf is not None:
+        st.download_button(
+            "Descargar PDF" if emitida else "Descargar PDF borrador", data=pdf,
+            file_name=f"liquidacion_{borrador['worker_id']}_{borrador['periodo']}_{borrador['estado']}.pdf",
+            mime="application/pdf", key=f"pdf-{borrador['id']}-{borrador.get('version', 1)}",
+        )
+    if emitida:
+        st.success(f"Emitida el {borrador['emitido'][:10]}. Es la liquidación vigente del trabajador.")
+        return
+
+    with st.expander("Ajustar haberes de la propuesta"):
+        st.caption("Cambia montos o agrega conceptos. Los descuentos legales se recalculan solos.")
+        filas = ([{"Concepto": h["concepto"], "Tipo": "Imponible", "Monto": h["monto"]}
+                  for h in propuesta["haberes_imponibles"]]
+                 + [{"Concepto": h["concepto"], "Tipo": "No imponible", "Monto": h["monto"]}
+                    for h in propuesta["haberes_no_imponibles"]])
+        editadas = st.data_editor(
+            pd.DataFrame(filas), num_rows="dynamic", hide_index=True, use_container_width=True,
+            key=f"haberes-{borrador['id']}-{borrador.get('version', 1)}-{borrador['actualizado']}",
+            column_config={
+                "Tipo": st.column_config.SelectboxColumn(options=["Imponible", "No imponible"], required=True),
+                "Monto": st.column_config.NumberColumn(min_value=0, step=1, format="%d", required=True),
+            },
+        )
+        nota_ajuste = st.text_input("Motivo del ajuste", value=borrador.get("nota") or "",
+                                    key=f"nota-ajuste-{borrador['id']}")
+        if st.button("Guardar ajustes", key=f"guardar-{borrador['id']}"):
+            filas_validas = editadas.dropna(subset=["Concepto", "Monto"])
+            imponibles = [{"concepto": f["Concepto"], "monto": int(f["Monto"])}
+                          for _, f in filas_validas.iterrows() if f["Tipo"] == "Imponible"]
+            no_imponibles = [{"concepto": f["Concepto"], "monto": int(f["Monto"])}
+                             for _, f in filas_validas.iterrows() if f["Tipo"] != "Imponible"]
+            if _llamar(cliente.ajustar_borrador, borrador["id"], imponibles, no_imponibles, nota_ajuste) is not None:
+                st.rerun()
+
+    with st.form(f"emitir-{borrador['id']}"):
+        nota = st.text_input("Nota de emisión", placeholder="Ej.: Se aplica tope imponible y se devuelve la diferencia.")
+        if st.form_submit_button("Emitir liquidación", type="primary"):
+            if not nota.strip():
+                st.error("Escribe una nota para emitir.")
+            elif _llamar(cliente.emitir_borrador, borrador["id"], nota) is not None:
+                st.rerun()
+
+
+_ORIGEN = {"base": "Sistema", "migrado": "Sistema", "excel": "Excel", "pdf": "PDF",
+           "rectificada": "Rectificada"}
 
 
 def zona_carga() -> None:
@@ -315,12 +436,44 @@ def zona_conectores() -> None:
         st.caption(conector["detalle"])
 
 
+_MOTIVO = {
+    "trabajador": "La pidió el trabajador",
+    "agente": "La marcó el agente",
+}
+
+
+def _motivos(solicitud: dict) -> str:
+    return " · ".join(_MOTIVO.get(m, m) for m in solicitud.get("motivos") or [])
+
+
+def zona_sectores() -> None:
+    filas = _llamar(cliente.estadisticas_solicitudes)
+    if filas is None:
+        return
+    st.caption("Solo cuentan las solicitudes que el trabajador envió. Es diferencia de cálculo si el motor "
+               "o el agente encontraron un monto mal calculado; si no, es revisión humana.")
+    st.dataframe(
+        [{
+            "Área": f["area"],
+            "Trabajadores": f["trabajadores"],
+            "Solicitudes": f["solicitudes"],
+            "Diferencias de cálculo": f["diferencias"],
+            "Revisión humana": f["revisiones"],
+            "Pendientes": f["pendientes"],
+        } for f in filas],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
 def main() -> None:
     st.title("Centro de control de RR.HH.")
     st.caption(f"Carga y decisiones pasan por la API en {base_url()}.")
-    casos, carga, conectores = st.tabs(["Casos", "Cargar", "Conectores"])
-    with casos:
-        zona_casos()
+    bandeja, sectores, carga, conectores = st.tabs(["Bandeja", "Sectores", "Cargar", "Conectores"])
+    with bandeja:
+        zona_bandeja()
+    with sectores:
+        zona_sectores()
     with carga:
         zona_carga()
     with conectores:

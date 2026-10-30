@@ -25,7 +25,17 @@ from harness.config import Settings
 from harness.ingest import asegurar_indice, estado_indice
 from harness.llm_factory import crear_embeddings, descripcion
 from harness.runtime import ejecutar
-from rrhh.bandeja import abrir_casos_faltantes, decidir, listar_casos, obtener_caso
+from rrhh import recalculo
+from rrhh.bandeja import abrir_casos_faltantes, decidir, listar_bandeja, listar_casos, obtener_caso
+from rrhh.pdf_liquidacion import pdf_borrador
+from rrhh.solicitudes import (
+    abrir_desde_consulta,
+    enviar as enviar_solicitud,
+    estadisticas as estadisticas_solicitudes,
+    listar_solicitudes,
+    obtener_solicitud,
+    responder as responder_solicitud,
+)
 from rrhh.servicio import (
     explicar_caso,
     procesar_anexo,
@@ -38,6 +48,7 @@ from rrhh.servicio import (
 @asynccontextmanager
 async def _inicio(_app: FastAPI):
     almacen.motor()  # crea las tablas y siembra la base vacía
+    almacen.completar_areas()
     abrir_casos_faltantes()
     yield
 
@@ -84,6 +95,38 @@ class Ajustes(BaseModel):
 class Consulta(BaseModel):
     pregunta: str = Field(min_length=1)
     ajustes: Ajustes = Ajustes()
+
+
+class NuevoBorrador(BaseModel):
+    worker_id: str = Field(min_length=1)
+    periodo: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+
+
+class Haber(BaseModel):
+    concepto: str
+    monto: int
+
+
+class AjusteBorrador(BaseModel):
+    haberes_imponibles: list[Haber]
+    haberes_no_imponibles: list[Haber] = []
+    nota: str = ""
+
+
+class Emision(BaseModel):
+    nota: str = Field(min_length=1)
+
+
+class RespuestaAnalista(BaseModel):
+    respuesta: str = Field(min_length=1)
+
+    @field_validator("respuesta")
+    @classmethod
+    def respuesta_con_texto(cls, valor: str) -> str:
+        limpio = valor.strip()
+        if not limpio:
+            raise ValueError("La respuesta para el trabajador no puede ir vacía.")
+        return limpio
 
 
 def _error_carga(e: ErrorCarga) -> HTTPException:
@@ -143,7 +186,7 @@ def reconstruir_indice(ajustes: Ajustes) -> dict:
 @app.get("/trabajadores")
 def trabajadores() -> list[dict]:
     return [
-        {"worker_id": wid, "nombre": t["nombre"], "cargo": t["cargo"]}
+        {"worker_id": wid, "nombre": t["nombre"], "cargo": t["cargo"], "area": t.get("area") or "Sin área"}
         for wid, t in datos.cargar_trabajadores().items()
     ]
 
@@ -172,9 +215,12 @@ def consulta(worker_id: str, cuerpo: Consulta) -> dict:
         res = ejecutar(worker_id, cuerpo.pregunta, cuerpo.ajustes.settings())
     except Exception as e:  # noqa: BLE001 - proveedor caído, modelo inexistente, etc.
         raise HTTPException(502, f"No se pudo ejecutar el agente: {type(e).__name__}: {e}") from e
+    informe = res.informe.model_dump() if res.informe else None
+    solicitud = abrir_desde_consulta(worker_id, cuerpo.pregunta, informe)
     return {
         "ok": res.ok,
-        "informe": res.informe.model_dump() if res.informe else None,
+        "informe": informe,
+        "solicitud": solicitud,
         "crudo": res.crudo,
         "traza": res.traza,
         "errores": res.errores,
@@ -183,7 +229,58 @@ def consulta(worker_id: str, cuerpo: Consulta) -> dict:
     }
 
 
+@app.get("/trabajadores/{worker_id}/solicitudes")
+def solicitudes_del_trabajador(worker_id: str) -> list[dict]:
+    if datos.obtener_trabajador(worker_id) is None:
+        raise HTTPException(404, "No existe el trabajador.")
+    return listar_solicitudes(worker_id)
+
+
+@app.post("/trabajadores/{worker_id}/solicitudes/{solicitud_id}/envio")
+def envio_de_solicitud(worker_id: str, solicitud_id: str) -> dict:
+    """El trabajador acepta la invitación del agente a pedir revisión."""
+    try:
+        return enviar_solicitud(worker_id, solicitud_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+# ------------------------------------------------------------------ RR.HH.: solicitudes de los mensajes
+@app.get("/estadisticas/solicitudes")
+def estadisticas() -> list[dict]:
+    return estadisticas_solicitudes()
+
+
+@app.get("/solicitudes")
+def solicitudes() -> list[dict]:
+    return listar_solicitudes()
+
+
+@app.get("/solicitudes/{solicitud_id}")
+def solicitud(solicitud_id: str) -> dict:
+    encontrada = obtener_solicitud(solicitud_id)
+    if encontrada is None:
+        raise HTTPException(404, "No existe la solicitud.")
+    return encontrada
+
+
+@app.post("/solicitudes/{solicitud_id}/respuesta")
+def respuesta_de_analista(solicitud_id: str, cuerpo: RespuestaAnalista) -> dict:
+    try:
+        return responder_solicitud(solicitud_id, cuerpo.respuesta)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 # ------------------------------------------------------------------ RR.HH.: casos
+@app.get("/bandeja")
+def bandeja() -> list[dict]:
+    """Una fila por liquidación en revisión: diferencias de cálculo y pedidos de revisión humana."""
+    return listar_bandeja()
+
+
 @app.get("/casos")
 def casos() -> list[dict]:
     return listar_casos()
@@ -211,6 +308,67 @@ def explicacion(caso_id: str) -> dict:
         return explicar_caso(caso_id)
     except ValueError as e:
         raise HTTPException(404, str(e)) from e
+
+
+# ------------------------------------------------------------------ RR.HH.: recálculo y borradores
+@app.get("/borradores")
+def borradores() -> list[dict]:
+    return recalculo.listar()
+
+
+@app.post("/borradores", status_code=201)
+def nuevo_borrador(cuerpo: NuevoBorrador) -> dict:
+    """Recalcula la liquidación emitida y guarda la propuesta como borrador."""
+    try:
+        return recalculo.generar(cuerpo.worker_id, cuerpo.periodo)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+def _borrador_o_404(borrador_id: str) -> dict:
+    encontrado = recalculo.obtener(borrador_id)
+    if encontrado is None:
+        raise HTTPException(404, "No existe el borrador.")
+    return encontrado
+
+
+@app.get("/borradores/{borrador_id}")
+def borrador(borrador_id: str) -> dict:
+    return _borrador_o_404(borrador_id)
+
+
+@app.put("/borradores/{borrador_id}")
+def ajustar_borrador(borrador_id: str, cuerpo: AjusteBorrador) -> dict:
+    try:
+        return recalculo.ajustar(
+            borrador_id,
+            [h.model_dump() for h in cuerpo.haberes_imponibles],
+            [h.model_dump() for h in cuerpo.haberes_no_imponibles],
+            cuerpo.nota,
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.get("/borradores/{borrador_id}/pdf")
+def pdf_de_borrador(borrador_id: str) -> Response:
+    encontrado = _borrador_o_404(borrador_id)
+    archivo = f"liquidacion_{encontrado['worker_id']}_{encontrado['periodo']}_{encontrado['estado']}.pdf"
+    return Response(content=pdf_borrador(encontrado), media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename={archivo}"})
+
+
+@app.post("/borradores/{borrador_id}/emision")
+def emitir_borrador(borrador_id: str, cuerpo: Emision) -> dict:
+    """La propuesta reemplaza a la liquidación vigente y el caso queda como corregido."""
+    try:
+        return recalculo.emitir(borrador_id, cuerpo.nota)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(409, str(e)) from e
 
 
 # ------------------------------------------------------------------ RR.HH.: datos

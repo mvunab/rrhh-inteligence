@@ -79,6 +79,55 @@ def listar_casos() -> list[dict]:
     )
 
 
+def listar_bandeja() -> list[dict]:
+    """Una fila por liquidación en revisión. Junta el caso del motor y las solicitudes del trabajador,
+    para que la misma liquidación no aparezca dos veces."""
+    from rrhh.solicitudes import listar_solicitudes
+
+    fichas = almacen.fichas_base()
+    filas: dict[str, dict] = {}
+    for caso in almacen.listar_casos():
+        if caso.get("hay_diferencias") or caso["estado"] != "pendiente":
+            filas[caso["id"]] = _fila_bandeja(caso["worker_id"], caso["periodo"], fichas) | {"caso": caso}
+    for solicitud in listar_solicitudes():
+        clave = f"{solicitud['worker_id']}-{solicitud['periodo']}"
+        if clave not in filas:
+            caso = almacen.obtener_caso(clave)
+            filas[clave] = _fila_bandeja(solicitud["worker_id"], solicitud["periodo"], fichas) | {"caso": caso}
+        filas[clave]["solicitudes"].append(solicitud)
+    return sorted((_resumir(f) for f in filas.values()),
+                  key=lambda f: (f["estado"] != "pendiente", f["tipo"] != "diferencia", -abs(f["diferencia_total"]),
+                                 f["id"]))
+
+
+def _fila_bandeja(worker_id: str, periodo: str | None, fichas: dict) -> dict:
+    ficha = fichas.get(worker_id) or {}
+    return {"id": f"{worker_id}-{periodo}", "worker_id": worker_id, "nombre": ficha.get("nombre", worker_id),
+            "area": ficha.get("area") or "Sin área", "periodo": periodo, "solicitudes": []}
+
+
+def _resumir(fila: dict) -> dict:
+    caso, solicitudes = fila.pop("caso"), fila["solicitudes"]
+    con_diferencia = bool(caso and caso.get("hay_diferencias"))
+    origen = []
+    if solicitudes:
+        origen.append("trabajador")
+    if con_diferencia:
+        origen.append("sistema")
+    pendiente = (any(s["estado"] == "pendiente" for s in solicitudes)
+                 or bool(caso and con_diferencia and caso["estado"] == "pendiente"))
+    return fila | {
+        "caso_id": caso["id"] if caso else None,
+        "tipo": "diferencia" if con_diferencia or any(s["tipo"] == "diferencia" for s in solicitudes)
+                else "revision",
+        "origen": origen,
+        "estado": "pendiente" if pendiente else "resuelta",
+        "severidad": caso["severidad"] if caso else "sin diferencias",
+        "diferencia_total": caso["diferencia_total"] if con_diferencia else 0,
+        "decision": caso["estado"] if caso and caso["estado"] != "pendiente" else None,
+    }
+
+
 def obtener_caso(caso_id: str) -> dict | None:
     return almacen.obtener_caso(caso_id)
 

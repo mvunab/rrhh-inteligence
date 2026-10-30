@@ -49,6 +49,25 @@ def test_pregunta_rapida_muestra_hallazgo_de_afp(app):
     assert "ProVida" in texto and "Habitat" in texto
 
 
+def test_el_chat_responde_lo_que_escribe_el_trabajador(app):
+    app.chat_input(key="chat_duda").set_value("¿Por qué mi bono de este mes es cero?").run()
+    assert not app.exception, app.exception
+    assert any(m.name == "user" for m in app.chat_message)
+    assert "bono" in _texto(app).lower()
+
+
+def test_el_agente_invita_a_pedir_revision_y_el_boton_la_envia(app):
+    next(b for b in app.button if b.key == "rapida_0").click()
+    app.run()
+    assert "Enviada a un analista" not in _texto(app)
+    boton = next(b for b in app.button if (b.key or "").startswith("enviar_"))
+    boton.click()
+    app.run()
+    assert not app.exception, app.exception
+    assert not any((b.key or "").startswith("enviar_") for b in app.button)
+    assert "Enviada a un analista" in _texto(app)
+
+
 def test_guardrail_en_la_interfaz(app):
     next(b for b in app.button if b.key == "rapida_4").click()
     app.run()

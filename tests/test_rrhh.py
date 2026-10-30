@@ -23,6 +23,46 @@ def _pdf(texto: str) -> bytes:
     return pdf_de_paginas([[texto]])
 
 
+def test_el_area_no_pisa_la_ficha_y_las_solicitudes_se_cuentan_por_sector():
+    from sqlalchemy import update
+
+    from harness.almacen import completar_areas, fichas_base, motor, trabajadores
+    from rrhh.solicitudes import abrir_desde_consulta, estadisticas
+
+    ficha = dict(fichas_base()["W004"])
+    afp = ficha["afp"]
+    ficha.pop("area", None)
+    with motor().begin() as cx:
+        cx.execute(update(trabajadores).where(trabajadores.c.worker_id == "W004").values(ficha=ficha))
+    assert completar_areas() == 1
+    restaurada = fichas_base()["W004"]
+    assert restaurada["area"] == "Admisión"
+    assert restaurada["afp"] == afp
+    assert completar_areas() == 0
+
+    critico = {"severidad": "critico", "descripcion": "Sin tope imponible.", "monto_diferencia": 188820,
+               "recomendacion": ""}
+    abrir_desde_consulta("W003", "Solicito que recursos humanos revise mi liquidación.",
+                         {"respuesta": "Hay una diferencia de tope.", "requiere_revision_rrhh": True,
+                          "hallazgos": [critico]})
+    abrir_desde_consulta("W002", "Quiero que un analista lo revise, no entiendo el turno.",
+                         {"respuesta": "El turno está bien pagado.", "requiere_revision_rrhh": True, "hallazgos": []})
+    propuesta = abrir_desde_consulta("W004", "Explícame mi liquidación.",
+                                     {"respuesta": "Cesantía mal descontada.", "requiere_revision_rrhh": True,
+                                      "hallazgos": [critico]})
+    assert propuesta["estado"] == "propuesta"
+    por_area = {fila["area"]: fila for fila in estadisticas()}
+    assert por_area["Traumatología"]["diferencias"] == 1
+    assert por_area["Traumatología"]["trabajadores"] == 1
+    assert por_area["Urgencia"]["revisiones"] == 1
+    assert por_area["Admisión"]["solicitudes"] == 0
+
+    repetida = abrir_desde_consulta("W004", "¿Por qué me descuentan cesantía en septiembre?",
+                                    {"respuesta": "Cesantía mal descontada.", "requiere_revision_rrhh": True,
+                                     "hallazgos": [critico]})
+    assert repetida["id"] == propuesta["id"] and len(repetida["mensajes"]) == 2
+
+
 def test_las_liquidaciones_guardadas_abren_sus_casos_sin_volver_a_cargar():
     from rrhh.bandeja import abrir_casos_faltantes
     abiertos = set(abrir_casos_faltantes())

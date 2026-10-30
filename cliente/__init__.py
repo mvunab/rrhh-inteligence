@@ -89,7 +89,19 @@ def consultar(worker_id: str, pregunta: str, ajustes: dict | None = None) -> dic
                   json={"pregunta": pregunta, "ajustes": ajustes or {}}, timeout=300).json()
 
 
+def solicitudes_trabajador(worker_id: str) -> list[dict]:
+    return _pedir("GET", f"/trabajadores/{worker_id}/solicitudes").json()
+
+
+def enviar_solicitud(worker_id: str, solicitud_id: str) -> dict:
+    return _pedir("POST", f"/trabajadores/{worker_id}/solicitudes/{solicitud_id}/envio").json()
+
+
 # ------------------------------------------------------------------ RR.HH.
+def bandeja() -> list[dict]:
+    return _pedir("GET", "/bandeja").json()
+
+
 def casos() -> list[dict]:
     return _pedir("GET", "/casos").json()
 
@@ -104,6 +116,45 @@ def decidir(caso_id: str, estado: str, nota: str) -> dict:
 
 def explicar(caso_id: str) -> dict:
     return _pedir("POST", f"/casos/{caso_id}/explicacion", timeout=300).json()
+
+
+def solicitudes() -> list[dict]:
+    return _pedir("GET", "/solicitudes").json()
+
+
+def estadisticas_solicitudes() -> list[dict]:
+    return _pedir("GET", "/estadisticas/solicitudes").json()
+
+
+def solicitud(solicitud_id: str) -> dict:
+    return _pedir("GET", f"/solicitudes/{solicitud_id}").json()
+
+
+def responder_solicitud(solicitud_id: str, respuesta: str) -> dict:
+    return _pedir("POST", f"/solicitudes/{solicitud_id}/respuesta", json={"respuesta": respuesta}).json()
+
+
+def borradores() -> list[dict]:
+    return _pedir("GET", "/borradores").json()
+
+
+def generar_borrador(worker_id: str, periodo: str) -> dict:
+    return _pedir("POST", "/borradores", json={"worker_id": worker_id, "periodo": periodo}).json()
+
+
+def ajustar_borrador(borrador_id: str, haberes_imponibles: list[dict], haberes_no_imponibles: list[dict],
+                     nota: str = "") -> dict:
+    return _pedir("PUT", f"/borradores/{borrador_id}", json={
+        "haberes_imponibles": haberes_imponibles, "haberes_no_imponibles": haberes_no_imponibles, "nota": nota,
+    }).json()
+
+
+def pdf_borrador(borrador_id: str) -> bytes:
+    return _pedir("GET", f"/borradores/{borrador_id}/pdf").content
+
+
+def emitir_borrador(borrador_id: str, nota: str) -> dict:
+    return _pedir("POST", f"/borradores/{borrador_id}/emision", json={"nota": nota}).json()
 
 
 def plantilla() -> bytes:

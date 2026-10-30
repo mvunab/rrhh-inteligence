@@ -38,7 +38,7 @@ PREGUNTAS_RAPIDAS = [  # (etiqueta del boton, pregunta completa)
     ("Mi bono de productividad", "¿Por qué mi bono de este mes es cero?"),
     ("¿Cambió mi AFP?", "¿Por qué cambió mi AFP respecto al mes pasado?"),
     ("Tope imponible", "¿Cuál es el tope imponible y cuánto vale hoy?"),
-    ("Probar guardrail", "¿Cuánto gana Tomás?"),
+    ("Datos de un compañero", "¿Cuánto gana Tomás?"),
 ]
 
 
@@ -245,7 +245,10 @@ def configurar_sidebar() -> tuple[dict, str]:
     wid = st.sidebar.selectbox(
         "Iniciar sesión como",
         list(trabajadores),
-        format_func=lambda w: f"{trabajadores[w]['nombre']} · {trabajadores[w]['cargo']}",
+        format_func=lambda w: (
+            f"{trabajadores[w]['nombre']} · {trabajadores[w]['cargo']}"
+            + (f" · {trabajadores[w]['area']}" if trabajadores[w].get("area") else "")
+        ),
         help="Simula al usuario autenticado. El agente solo puede ver SU información.",
     )
     if st.sidebar.button("Configuración", key="abrir_config", use_container_width=True):
@@ -254,12 +257,12 @@ def configurar_sidebar() -> tuple[dict, str]:
     if st.session_state.get("config_abierta"):
         ventana_configuracion()
     st.sidebar.divider()
-    st.sidebar.checkbox("Mostrar traza del agente", value=True, key="ver_traza")
+    st.sidebar.checkbox("Mostrar traza del agente", value=False, key="ver_traza")
     return cfg, wid
 
 
-# ----------------------------------------------------------------------------- pestañas
-def tab_liquidacion(wid: str) -> None:
+# ----------------------------------------------------------------------------- vista única
+def panel_liquidacion(wid: str) -> None:
     perfil = _llamar(cliente.trabajador, wid)
     if perfil is None:
         return
@@ -274,7 +277,8 @@ def tab_liquidacion(wid: str) -> None:
     c1.metric("Líquido a pagar", clp(liq["liquido_a_pagar"]))
     c2.metric("Total haberes", clp(liq["total_haberes"]))
     c3.metric("Total descuentos", clp(liq["total_descuentos"]))
-    st.caption(f"{t['nombre']} · {t['cargo']} · contrato {t['tipo_contrato'].replace('_', ' ')} · "
+    area = f"{t['area']} · " if t.get("area") else ""
+    st.caption(f"{t['nombre']} · {area}{t['cargo']} · contrato {t['tipo_contrato'].replace('_', ' ')} · "
                f"AFP {t['afp']} · {t['salud']}")
     col_a, col_b = st.columns(2)
     with col_a:
@@ -290,8 +294,7 @@ def tab_liquidacion(wid: str) -> None:
                        "Tasa": "—" if d["tasa"] is None else f"{d['tasa'] * 100:.2f}%",
                        "Monto": clp(d["monto"])} for d in liq["descuentos_legales"]],
                      hide_index=True, use_container_width=True)
-    st.info("Esta tabla muestra la liquidación tal como la emitió el sistema, sin marcar errores. "
-            "Pregúntale al asistente para revisarla.")
+    st.caption("Así la emitió el sistema. Si algo no cuadra, pregúntale al asistente aquí abajo.")
 
 
 def mostrar_resultado(res: dict) -> None:
@@ -309,6 +312,8 @@ def mostrar_resultado(res: dict) -> None:
         chips.append('<span class="chip chip-warn">Requiere revisión de RR.HH.</span>')
     elif not inf["fuera_de_alcance"]:
         chips.append('<span class="chip chip-ok">Sin diferencias que revisar</span>')
+    if (res.get("solicitud") or {}).get("estado") in ("pendiente", "respondida"):
+        chips.append('<span class="chip chip-warn">Enviada a un analista</span>')
     if res["reparado"]:
         chips.append('<span class="chip">JSON reparado por el harness</span>')
     st.markdown(" ".join(chips), unsafe_allow_html=True)
@@ -340,68 +345,82 @@ def mostrar_resultado(res: dict) -> None:
             st.json(inf)
 
 
-def tab_asistente(wid: str) -> None:
-    historial = st.session_state.setdefault("historial", {}).setdefault(wid, [])
-    st.caption("Cada pregunta es independiente (el agente no tiene memoria de conversación).")
-
-    cols = st.columns(len(PREGUNTAS_RAPIDAS))
-    for i, (col, (etiqueta, pregunta)) in enumerate(zip(cols, PREGUNTAS_RAPIDAS)):
-        if col.button(etiqueta, use_container_width=True, key=f"rapida_{i}", help=pregunta):
-            st.session_state["pendiente"] = pregunta
-    with st.form("form_pregunta", clear_on_submit=True):
-        texto = st.text_input("O escribe tu pregunta", placeholder="Ej.: ¿Por qué me descuentan impuesto?")
-        if st.form_submit_button("Preguntar") and texto.strip():
-            st.session_state["pendiente"] = texto.strip()
-
-    pregunta = st.session_state.pop("pendiente", None)
-    if pregunta:
-        with st.spinner("El agente está consultando sus herramientas…"):
-            res = _llamar(cliente.consultar, wid, pregunta, ajustes_activos())
-        if res is not None:
-            historial.insert(0, {"pregunta": pregunta, "res": res})
-        else:
-            st.caption("Revisa el proveedor en Configuración. Con LLM y embeddings en 'mock' la API responde sin red.")
-
-    if not historial:
-        st.info("Elige una pregunta rápida o escribe la tuya.")
-    for item in historial:
+def _respuestas_del_analista(wid: str) -> None:
+    solicitudes = _llamar(cliente.solicitudes_trabajador, wid) or []
+    if not solicitudes:
+        return
+    st.markdown("**Respuestas de RR.HH.**")
+    for solicitud in solicitudes:
         with st.container(border=True):
-            st.markdown(f'<div class="pregunta">🙋 {item["pregunta"]}</div>', unsafe_allow_html=True)
-            mostrar_resultado(item["res"])
+            st.caption(solicitud["pregunta"])
+            if solicitud["estado"] == "respondida" and solicitud.get("respuesta"):
+                st.success(solicitud["respuesta"])
+            else:
+                st.info("Un analista tiene tu solicitud. La respuesta aparecerá aquí.")
 
 
-ARQUITECTURA = """
-digraph G {
-  rankdir=LR; bgcolor="transparent"; node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#1e2761", fillcolor="#eef1f7"];
-  edge [color="#555555", fontname="Helvetica", fontsize=9];
-  U [label="Trabajador\\n(sesión autenticada)", fillcolor="#fff1dc"];
-  A [label="Streamlit"]; P [label="API\\n(FastAPI)"]; H [label="Harness\\n(valida JSON, grounding)"]; G [label="Agente\\ncreate_agent + LLM"];
-  T1 [label="obtener_liquidacion"]; T2 [label="calcular_descuentos_esperados"]; T3 [label="consultar_parametros"]; T4 [label="buscar_en_documentos", fillcolor="#e3f4ea"];
-  C [label="Chroma\\n(filtro worker_id)", shape=cylinder, fillcolor="#e3f4ea"];
-  D [label="Base de datos\\n(PostgreSQL) y reglas\\n(calculos.py)", shape=cylinder];
-  U -> A -> P -> H -> G; G -> T1; G -> T2; G -> T3; G -> T4; T4 -> C; T1 -> D; T2 -> D; T3 -> D;
-}
-"""
+def _invitacion_a_rrhh(wid: str, item: dict, indice: int) -> None:
+    """Si el agente encontró algo para revisar, el trabajador decide si lo envía a RR.HH."""
+    solicitud = item["res"].get("solicitud")
+    if not solicitud:
+        return
+    if solicitud["estado"] != "propuesta":
+        st.caption(f"Solicitud {solicitud['id']} enviada a RR.HH. La respuesta aparecerá en esta conversación.")
+        return
+    with st.container(border=True):
+        st.markdown("**¿Quieres que RR.HH. lo revise?** Enviaremos este resumen a un analista "
+                    "y su respuesta aparecerá aquí.")
+        if st.button("Solicitar revisión a RR.HH.", key=f"enviar_{indice}_{solicitud['id']}", type="primary"):
+            enviada = _llamar(cliente.enviar_solicitud, wid, solicitud["id"])
+            if enviada is not None:
+                item["res"]["solicitud"] = enviada
+                st.rerun()
 
 
-def tab_arquitectura() -> None:
-    st.graphviz_chart(ARQUITECTURA, use_container_width=True)
-    st.markdown(
-        """
-**Por qué RAG aquí.** Lo que dice cada contrato y cada política es texto largo, distinto por persona
-y cambia con los anexos: no cabe en un prompt fijo y no se puede calcular. Eso se *recupera*.
-Lo que se puede calcular (descuentos, topes) lo hacen las tools, porque el LLM no debe hacer aritmética.
+def panel_dudas(wid: str) -> None:
+    st.subheader("Asistente")
+    st.caption("Si encuentro algo que revisar, te ofrezco enviarlo a RR.HH. "
+               "También puedes pedir en tu mensaje que lo revise una persona.")
+    historial = st.session_state.setdefault("historial", {}).setdefault(wid, [])
+    ficha = (_llamar(cliente.trabajador, wid) or {}).get("ficha") or {}
+    nombre = (ficha.get("nombre") or "").split(" ")[0]
 
-**Controles de seguridad.**
-- El id del trabajador no es parámetro de ninguna tool: viene de la sesión.
-- El retriever filtra por `worker_id` (el trabajador ve lo suyo y lo compartido).
-- Toda fuente citada debe haber sido recuperada en la misma ejecución.
-- La salida debe cumplir `agent/output.schema.json`; si no, el harness reintenta una vez.
+    with st.container(border=True):
+        with st.container(height=380, border=False, autoscroll=True):
+            with st.chat_message("assistant"):
+                st.markdown(f"Hola{' ' + nombre if nombre else ''}. Revisé tu liquidación y tu contrato. "
+                            "Pregúntame por un descuento, un bono o pide que lo revise una persona.")
+            _respuestas_del_analista(wid)
+            for indice, item in enumerate(historial):
+                with st.chat_message("user"):
+                    st.markdown(md(item["pregunta"]))
+                with st.chat_message("assistant"):
+                    mostrar_resultado(item["res"])
+                    _invitacion_a_rrhh(wid, item, indice)
+            pregunta = st.session_state.pop("pendiente", None)
+            if pregunta:
+                with st.chat_message("user"):
+                    st.markdown(md(pregunta))
+                with st.chat_message("assistant"):
+                    with st.spinner("Revisando tu liquidación…"):
+                        res = _llamar(cliente.consultar, wid, pregunta, ajustes_activos())
+                    if res is None:
+                        st.caption("Revisa el proveedor en Configuración. "
+                                   "Con LLM y embeddings en 'mock' la API responde sin red.")
+                    else:
+                        historial.append({"pregunta": pregunta, "res": res})
+                        mostrar_resultado(res)
+                        _invitacion_a_rrhh(wid, historial[-1], len(historial) - 1)
 
-**Límites del ejercicio.** Solo Fonasa, sin horas extra, anticipos ni licencias. El agente explica y marca
-diferencias; no certifica cumplimiento legal. Ver `docs/gaps_de_negocio.md`.
-"""
-    )
+        with st.container(horizontal=True, gap="small"):
+            for i, (etiqueta, texto_pregunta) in enumerate(PREGUNTAS_RAPIDAS):
+                if st.button(etiqueta, key=f"rapida_{i}", help=texto_pregunta):
+                    st.session_state["pendiente"] = texto_pregunta
+                    st.rerun()
+        texto = st.chat_input("Escribe tu duda sobre la liquidación…", key="chat_duda")
+        if texto and texto.strip():
+            st.session_state["pendiente"] = texto.strip()
+            st.rerun()
 
 
 def main() -> None:
@@ -424,13 +443,8 @@ def main() -> None:
         f'<span class="chip">RAG: {vista["collection"]} · k={vista["k"]}</span>',
         unsafe_allow_html=True,
     )
-    t1, t2, t3 = st.tabs(["Mi liquidación", "Asistente", "Cómo funciona"])
-    with t1:
-        tab_liquidacion(wid)
-    with t2:
-        tab_asistente(wid)
-    with t3:
-        tab_arquitectura()
+    panel_liquidacion(wid)
+    panel_dudas(wid)
 
 
 main()

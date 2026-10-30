@@ -102,6 +102,147 @@ def test_un_anexo_con_cambios_mueve_la_ficha_y_el_caso(api):
     assert malo.status_code == 400
 
 
+def test_el_agente_invita_y_solo_llega_al_analista_si_el_trabajador_la_envia(api):
+    res = api.post("/trabajadores/W001/consultas", json={"pregunta": "Explícame mi liquidación de 2026-09."})
+    assert res.status_code == 200, res.text
+    propuesta = res.json()["solicitud"]
+    assert propuesta["estado"] == "propuesta"
+    assert propuesta["periodo"] == "2026-09"
+    assert propuesta["resumen"]
+    assert api.get("/solicitudes").json() == []
+    assert api.get("/trabajadores/W001/solicitudes").json() == []
+    assert api.post(f"/trabajadores/W002/solicitudes/{propuesta['id']}/envio").status_code == 404
+
+    enviada = api.post(f"/trabajadores/W001/solicitudes/{propuesta['id']}/envio")
+    assert enviada.status_code == 200, enviada.text
+    solicitud = enviada.json()
+    assert solicitud["estado"] == "pendiente"
+    assert solicitud["motivos"] == ["trabajador", "agente"]
+    assert api.post(f"/trabajadores/W001/solicitudes/{propuesta['id']}/envio").status_code == 409
+    listada = api.get("/solicitudes").json()[0]
+    assert listada["id"] == solicitud["id"] and listada["tipo"] == "diferencia"
+
+    vacia = api.post(f"/solicitudes/{solicitud['id']}/respuesta", json={"respuesta": "  "})
+    assert vacia.status_code == 422
+    enviada = api.post(f"/solicitudes/{solicitud['id']}/respuesta",
+                       json={"respuesta": "La AFP del contrato es Habitat. Lo corregimos en octubre."})
+    assert enviada.status_code == 200
+    vista = api.get("/trabajadores/W001/solicitudes").json()[0]
+    assert vista["estado"] == "respondida"
+    assert "Habitat" in vista["respuesta"]
+
+
+def test_el_pedido_en_el_mensaje_abre_solicitud_aunque_el_agente_no_la_marque(api, monkeypatch):
+    from harness.runtime import ResultadoEjecucion
+    from harness.schemas import InformeLiquidacion
+
+    def falso(*_args, **_kwargs):
+        informe = InformeLiquidacion(respuesta="Tu liquidación de septiembre cuadra con el contrato.",
+                                     requiere_revision_rrhh=False, fuera_de_alcance=False)
+        return ResultadoEjecucion(informe=informe, crudo="{}")
+
+    monkeypatch.setattr("api.main.ejecutar", falso)
+    res = api.post("/trabajadores/W002/consultas",
+                   json={"pregunta": "Solicito que recursos humanos revise mi liquidación."})
+    solicitud = res.json()["solicitud"]
+    assert solicitud["motivos"] == ["trabajador"]
+    assert solicitud["estado"] == "pendiente"
+    assert "cuadra" in solicitud["resumen"]
+    assert api.get("/solicitudes").json()[0]["tipo"] == "revision"
+    assert api.post("/trabajadores/W002/consultas", json={"pregunta": "¿Cuánto es mi colación?"}).json()["solicitud"] is None
+
+    otra = api.post("/trabajadores/W002/consultas",
+                    json={"pregunta": "Quiero hablar con una persona de RR.HH. sobre septiembre."}).json()["solicitud"]
+    assert otra["id"] == solicitud["id"]
+    assert [m["texto"] for m in otra["mensajes"]] == [
+        "Solicito que recursos humanos revise mi liquidación.",
+        "Quiero hablar con una persona de RR.HH. sobre septiembre."]
+    assert len(api.get("/solicitudes").json()) == 1
+
+
+def test_la_bandeja_junta_la_diferencia_del_sistema_y_el_pedido_del_trabajador(api, monkeypatch):
+    from harness.runtime import ResultadoEjecucion
+    from harness.schemas import InformeLiquidacion
+
+    def falso(*_args, **_kwargs):
+        informe = InformeLiquidacion(respuesta="Tu liquidación cuadra.", requiere_revision_rrhh=False,
+                                     fuera_de_alcance=False)
+        return ResultadoEjecucion(informe=informe, crudo="{}")
+
+    monkeypatch.setattr("api.main.ejecutar", falso)
+    antes = {i["id"]: i for i in api.get("/bandeja").json()}
+    assert antes["W003-2026-09"]["tipo"] == "diferencia" and antes["W003-2026-09"]["origen"] == ["sistema"]
+    assert "W002-2026-09" not in antes
+
+    api.post("/trabajadores/W003/consultas", json={"pregunta": "Solicito que RR.HH. revise mi liquidación."})
+    api.post("/trabajadores/W002/consultas", json={"pregunta": "Solicito que RR.HH. revise mi liquidación."})
+    despues = {i["id"]: i for i in api.get("/bandeja").json()}
+    assert len(despues) == len(antes) + 1
+    valentina = despues["W003-2026-09"]
+    assert valentina["tipo"] == "diferencia" and valentina["origen"] == ["trabajador", "sistema"]
+    assert len(valentina["solicitudes"]) == 1 and valentina["caso_id"] == "W003-2026-09"
+    assert despues["W002-2026-09"]["tipo"] == "revision" and despues["W002-2026-09"]["diferencia_total"] == 0
+
+
+def test_el_recalculo_propone_ajusta_y_emite_la_liquidacion_corregida(api):
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    assert api.post("/borradores", json={"worker_id": "W003", "periodo": "2026-13"}).status_code == 422
+    assert api.post("/borradores", json={"worker_id": "W003", "periodo": "2025-01"}).status_code == 404
+    creado = api.post("/borradores", json={"worker_id": "W003", "periodo": "2026-09"})
+    assert creado.status_code == 201, creado.text
+    borrador = creado.json()
+    assert borrador["estado"] == "borrador"
+    afp = next(d for d in borrador["propuesta"]["descuentos_legales"] if d["codigo"] == "afp")
+    assert afp["base"] == borrador["parametros"]["tope_afp_salud"]
+    conceptos = {a["concepto"]: a for a in borrador["ajustes"]}
+    assert "tope imponible" in conceptos["AFP Cuprum"]["motivo"]
+    assert conceptos["Líquido a pagar"]["diferencia"] > 0
+    assert api.get("/liquidaciones").json()  # la emitida no cambia todavía
+    assert api.get("/trabajadores/W003/liquidacion", params={"periodo": "2026-09"}).json()["liquido_a_pagar"] \
+        == borrador["original"]["liquido_a_pagar"]
+
+    pdf = api.get(f"/borradores/{borrador['id']}/pdf")
+    assert pdf.headers["content-type"] == "application/pdf"
+    texto = "\n".join(p.extract_text() for p in PdfReader(BytesIO(pdf.content)).pages)
+    assert "LIQUIDACIÓN DE SUELDO" in texto and "BORRADOR" in texto and "Valentina" in texto
+
+    imponibles = borrador["propuesta"]["haberes_imponibles"] + [{"concepto": "Bono especial", "monto": 100000}]
+    negativo = api.put(f"/borradores/{borrador['id']}", json={
+        "haberes_imponibles": [{"concepto": "Sueldo base", "monto": -1}]})
+    assert negativo.status_code == 400
+    ajustado = api.put(f"/borradores/{borrador['id']}", json={
+        "haberes_imponibles": imponibles,
+        "haberes_no_imponibles": borrador["propuesta"]["haberes_no_imponibles"],
+        "nota": "Bono especial aprobado por jefatura.",
+    }).json()
+    especial = next(a for a in ajustado["ajustes"] if a["concepto"] == "Bono especial")
+    assert especial["motivo"] == "Bono especial aprobado por jefatura." and especial["propuesto"] == 100000
+    assert "tope imponible" in next(a for a in ajustado["ajustes"] if a["concepto"] == "AFP Cuprum")["motivo"]
+
+    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": ""}).status_code == 422
+    emitido = api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "Se aplica tope imponible."})
+    assert emitido.status_code == 200, emitido.text
+    assert emitido.json()["estado"] == "emitida"
+    vigente = api.get("/trabajadores/W003/liquidacion", params={"periodo": "2026-09"}).json()
+    assert vigente["liquido_a_pagar"] == ajustado["propuesta"]["liquido_a_pagar"]
+    caso = api.get("/casos/W003-2026-09").json()
+    assert caso["estado"] == "corregir" and caso["hay_diferencias"] is False
+    origen = next(l for l in api.get("/liquidaciones").json() if l["worker_id"] == "W003" and l["periodo"] == "2026-09")
+    assert origen["origen"] == "rectificada"
+    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "otra vez"}).status_code == 409
+    texto = "\n".join(p.extract_text() for p in PdfReader(BytesIO(api.get(f"/borradores/{borrador['id']}/pdf").content)).pages)
+    assert "BORRADOR" not in texto and "Liquidación rectificada" in texto
+
+
+def test_el_recalculo_quita_la_cesantia_en_plazo_fijo(api):
+    borrador = api.post("/borradores", json={"worker_id": "W004", "periodo": "2026-09"}).json()
+    cesantia = next(a for a in borrador["ajustes"] if a["concepto"] == "Seguro de cesantía")
+    assert cesantia["propuesto"] == 0 and "plazo fijo" in cesantia["motivo"]
+
+
 def test_el_trabajador_consulta_al_agente_por_la_api(api):
     perfil = api.get("/trabajadores/W001").json()
     assert perfil["periodos"] == ["2026-08", "2026-09"]

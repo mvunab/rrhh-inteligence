@@ -27,6 +27,7 @@ from sqlalchemy import (
     delete,
     insert,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
@@ -68,6 +69,23 @@ liquidaciones = Table(
 
 casos = Table(
     "casos", meta,
+    Column("id", String(40), primary_key=True),
+    Column("worker_id", String(16), nullable=False, index=True),
+    Column("periodo", String(7), nullable=False),
+    Column("estado", String(16), nullable=False),
+    Column("datos", _JSON, nullable=False),
+)
+
+solicitudes = Table(
+    "solicitudes", meta,
+    Column("id", String(40), primary_key=True),
+    Column("worker_id", String(16), nullable=False, index=True),
+    Column("estado", String(16), nullable=False),
+    Column("datos", _JSON, nullable=False),
+)
+
+borradores = Table(
+    "borradores", meta,
     Column("id", String(40), primary_key=True),
     Column("worker_id", String(16), nullable=False, index=True),
     Column("periodo", String(7), nullable=False),
@@ -150,6 +168,25 @@ def _sembrar_si_vacia(motor: Engine) -> None:
 
 
 # ------------------------------------------------------------------ trabajadores y ficha vigente
+def completar_areas() -> int:
+    """Completa el área en fichas ya guardadas que no la traen. No pisa el resto de la ficha."""
+    semilla = {
+        f["worker_id"]: f.get("area")
+        for f in json.loads((DATA_DIR / "trabajadores.json").read_text(encoding="utf-8"))
+        if f.get("area")
+    }
+    cambiadas = 0
+    with motor().begin() as cx:
+        for fila in cx.execute(select(trabajadores)).all():
+            ficha = dict(fila.ficha)
+            if ficha.get("area") or fila.worker_id not in semilla:
+                continue
+            ficha["area"] = semilla[fila.worker_id]
+            cx.execute(update(trabajadores).where(trabajadores.c.worker_id == fila.worker_id).values(ficha=ficha))
+            cambiadas += 1
+    return cambiadas
+
+
 def fichas_base() -> dict[str, dict]:
     with motor().connect() as cx:
         filas = cx.execute(select(trabajadores).order_by(trabajadores.c.worker_id)).all()
@@ -315,3 +352,48 @@ def guardar_caso(caso: dict) -> dict:
         cx.execute(insert(casos).values(id=caso["id"], worker_id=caso["worker_id"], periodo=caso["periodo"],
                                         estado=caso["estado"], datos=caso))
     return caso
+
+
+# ------------------------------------------------------------------ solicitudes al analista
+def listar_solicitudes(worker_id: str | None = None) -> list[dict]:
+    consulta = select(solicitudes)
+    if worker_id is not None:
+        consulta = consulta.where(solicitudes.c.worker_id == worker_id)
+    with motor().connect() as cx:
+        return [f.datos for f in cx.execute(consulta).all()]
+
+
+def obtener_solicitud(solicitud_id: str) -> dict | None:
+    with motor().connect() as cx:
+        fila = cx.execute(select(solicitudes).where(solicitudes.c.id == solicitud_id)).first()
+    return fila.datos if fila else None
+
+
+def guardar_solicitud(solicitud: dict) -> dict:
+    with motor().begin() as cx:
+        cx.execute(delete(solicitudes).where(solicitudes.c.id == solicitud["id"]))
+        cx.execute(insert(solicitudes).values(
+            id=solicitud["id"], worker_id=solicitud["worker_id"], estado=solicitud["estado"], datos=solicitud))
+    return solicitud
+
+
+# ------------------------------------------------------------------ borradores de liquidación corregida
+def listar_borradores() -> list[dict]:
+    with motor().connect() as cx:
+        return [f.datos for f in cx.execute(select(borradores).order_by(borradores.c.periodo,
+                                                                         borradores.c.worker_id)).all()]
+
+
+def obtener_borrador(borrador_id: str) -> dict | None:
+    with motor().connect() as cx:
+        fila = cx.execute(select(borradores).where(borradores.c.id == borrador_id)).first()
+    return fila.datos if fila else None
+
+
+def guardar_borrador(borrador: dict) -> dict:
+    with motor().begin() as cx:
+        cx.execute(delete(borradores).where(borradores.c.id == borrador["id"]))
+        cx.execute(insert(borradores).values(
+            id=borrador["id"], worker_id=borrador["worker_id"], periodo=borrador["periodo"],
+            estado=borrador["estado"], datos=borrador))
+    return borrador

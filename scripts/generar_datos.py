@@ -31,7 +31,7 @@ EMPRESA = "Clínica Traumatología Cóndor SpA (ficticia)"
 
 TRABAJADORES = [
     {
-        "worker_id": "W001", "nombre": "Camila Rojas Pizarro", "cargo": "Kinesióloga",
+        "worker_id": "W001", "nombre": "Camila Rojas Pizarro", "cargo": "Kinesióloga", "area": "Rehabilitación",
         "tipo_contrato": "indefinido", "fecha_inicio": "2023-03-01", "fecha_termino": None,
         "afp": "Habitat", "salud": "Fonasa", "sueldo_base": 1_000_000,
         "colacion": 50_000, "movilizacion": 40_000, "asignacion_turno": 0,
@@ -39,7 +39,7 @@ TRABAJADORES = [
         "jornada": "44 horas semanales, de lunes a viernes",
     },
     {
-        "worker_id": "W002", "nombre": "Tomás Aguilera Soto", "cargo": "Técnico paramédico",
+        "worker_id": "W002", "nombre": "Tomás Aguilera Soto", "cargo": "Técnico paramédico", "area": "Urgencia",
         "tipo_contrato": "indefinido", "fecha_inicio": "2022-08-15", "fecha_termino": None,
         "afp": "Modelo", "salud": "Fonasa", "sueldo_base": 700_000,
         "colacion": 45_000, "movilizacion": 40_000, "asignacion_turno": 80_000,
@@ -47,7 +47,7 @@ TRABAJADORES = [
         "jornada": "44 horas semanales, en régimen de turnos rotativos",
     },
     {
-        "worker_id": "W003", "nombre": "Valentina Cortés Vera", "cargo": "Médica traumatóloga",
+        "worker_id": "W003", "nombre": "Valentina Cortés Vera", "cargo": "Médica traumatóloga", "area": "Traumatología",
         "tipo_contrato": "indefinido", "fecha_inicio": "2021-01-04", "fecha_termino": None,
         "afp": "Cuprum", "salud": "Fonasa", "sueldo_base": 4_500_000,
         "colacion": 60_000, "movilizacion": 0, "asignacion_turno": 0,
@@ -55,7 +55,7 @@ TRABAJADORES = [
         "jornada": "44 horas semanales, de lunes a viernes",
     },
     {
-        "worker_id": "W004", "nombre": "Diego Fuentes Lagos", "cargo": "Ejecutivo de admisión",
+        "worker_id": "W004", "nombre": "Diego Fuentes Lagos", "cargo": "Ejecutivo de admisión", "area": "Admisión",
         "tipo_contrato": "plazo_fijo", "fecha_inicio": "2026-07-01", "fecha_termino": "2026-12-31",
         "afp": "Uno", "salud": "Fonasa", "sueldo_base": 620_000,
         "colacion": 40_000, "movilizacion": 35_000, "asignacion_turno": 0,

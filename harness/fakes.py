@@ -196,7 +196,8 @@ class MockLiquidacionChatModel(BaseChatModel):
                         descripcion=f"{f.get('concepto_pagado') or f['concepto']}: se descontó {_fmt(f['pagado'])} y el cálculo esperado es "
                                     f"{_fmt(f['esperado'])}. {f.get('causa_probable') or ''}".strip(),
                         monto_diferencia=f["diferencia"],
-                        recomendacion="Pedir revisión a Recursos Humanos dentro de 5 días hábiles."))
+                        recomendacion="Puedes enviar la solicitud de revisión a RR.HH. con el botón de abajo. "
+                                      "El plazo es de 5 días hábiles desde la entrega de la liquidación."))
                 elif f["estado"] == "derivada":
                     hallazgos.append(Hallazgo(
                         severidad="info",
@@ -207,7 +208,8 @@ class MockLiquidacionChatModel(BaseChatModel):
             if g.get("estado") == "diferencia":
                 hallazgos.append(Hallazgo(
                     severidad="revisar", descripcion="La gratificación pagada difiere de la esperada.",
-                    monto_diferencia=g["diferencia"], recomendacion="Pedir revisión a Recursos Humanos."))
+                    monto_diferencia=g["diferencia"],
+                    recomendacion="Puedes enviar la solicitud de revisión a RR.HH. con el botón de abajo."))
 
         revisar = any(h.severidad != "info" for h in hallazgos)
 
