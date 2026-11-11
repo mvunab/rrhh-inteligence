@@ -20,7 +20,14 @@ def borrador_id(worker_id: str, periodo: str) -> str:
     return f"B-{worker_id}-{periodo}"
 
 
-def generar(worker_id: str, periodo: str) -> dict:
+class VersionDesactualizada(ValueError):
+    """Se intentó emitir una versión distinta de la que está guardada."""
+
+
+AUTOR_POR_DEFECTO = "Analista RR.HH."
+
+
+def generar(worker_id: str, periodo: str, autor: str = AUTOR_POR_DEFECTO) -> dict:
     """Recalcula la liquidación emitida con la ficha vigente del periodo y la deja como borrador."""
     original = obtener_liquidacion(worker_id, periodo)
     ficha = obtener_trabajador(worker_id, periodo)
@@ -44,15 +51,20 @@ def generar(worker_id: str, periodo: str) -> dict:
         "creado": ahora,
         "actualizado": ahora,
         "emitido": None,
+        "autor": _autor(autor),
     }
-    return almacen.guardar_borrador(_recalcular(borrador, params, ficha, imponibles,
-                                                original["haberes_no_imponibles"]))
+    borrador = _recalcular(borrador, params, ficha, imponibles, original["haberes_no_imponibles"])
+    return almacen.guardar_borrador(borrador, _evento("propuesta_generada", borrador, {
+        "motivos": motivos, "reemplaza_version": (previo or {}).get("version"),
+        "estado_previo": (previo or {}).get("estado")}))
 
 
 def ajustar(id_: str, haberes_imponibles: list[dict], haberes_no_imponibles: list[dict],
-            nota: str = "") -> dict:
-    """El analista cambia haberes. Los descuentos legales se vuelven a calcular, no se escriben a mano."""
+            nota: str = "", autor: str = AUTOR_POR_DEFECTO) -> dict:
+    """El analista cambia haberes. Los descuentos legales se vuelven a calcular, no se escriben a mano.
+    Cada ajuste es una versión nueva."""
     borrador = _borrador_editable(id_)
+    anterior = copy.deepcopy(borrador["propuesta"])
     imponibles = _validar_haberes(haberes_imponibles, "imponibles")
     no_imponibles = _validar_haberes(haberes_no_imponibles, "no imponibles", permitir_vacio=True)
     if not imponibles:
@@ -66,23 +78,214 @@ def ajustar(id_: str, haberes_imponibles: list[dict], haberes_no_imponibles: lis
         if previos.get(haber["concepto"]) != haber["monto"]:
             motivos[haber["concepto"]] = borrador["nota"] or "Ajuste del analista."
     borrador["motivos"] = motivos
-    borrador["actualizado"] = _ahora()
-    return almacen.guardar_borrador(_recalcular(borrador, cargar_parametros(), ficha, imponibles, no_imponibles))
+    borrador.update(actualizado=_ahora(), version=borrador["version"] + 1, autor=_autor(autor))
+    borrador = _recalcular(borrador, cargar_parametros(), ficha, imponibles, no_imponibles)
+    cambios = diff_liquidaciones(anterior, borrador["propuesta"])["cambios"]
+    if not cambios:
+        raise ValueError("El ajuste no cambia ningún monto.")
+    return almacen.guardar_borrador(borrador, _evento("propuesta_ajustada", borrador, {
+        "nota": borrador["nota"], "cambios": cambios}))
 
 
-def emitir(id_: str, nota: str) -> dict:
-    """La propuesta pasa a ser la liquidación vigente y el caso queda decidido como corregido."""
+def emitir(id_: str, nota: str, version: int, autor: str = AUTOR_POR_DEFECTO) -> dict:
+    """La propuesta pasa a ser la liquidación vigente y el caso queda decidido como corregido.
+
+    Exige la versión que el analista revisó en el diff: si alguien la cambió después, no se emite.
+    """
     if not str(nota or "").strip():
         raise ValueError("La emisión necesita una nota.")
     borrador = _borrador_editable(id_)
+    if version != borrador["version"]:
+        raise VersionDesactualizada(
+            f"Revisaste la versión v{version}, pero la propuesta ya va en v{borrador['version']}. "
+            "Revisa los cambios otra vez antes de emitir.")
+    autor = _autor(autor)
     liquidacion = borrador["propuesta"]
-    almacen.guardar_liquidaciones([liquidacion], ORIGEN_EMITIDA)
+    anterior = obtener_liquidacion(borrador["worker_id"], borrador["periodo"])
+    almacen.guardar_liquidaciones([liquidacion], ORIGEN_EMITIDA, autor,
+                                  {"borrador": borrador["id"], "version": version, "nota": nota.strip()})
     sincronizar_casos([liquidacion])
     caso_id = f"{borrador['worker_id']}-{borrador['periodo']}"
     if almacen.obtener_caso(caso_id) is not None:
-        decidir(caso_id, "corregir", f"Liquidación rectificada emitida ({borrador['id']}). {nota.strip()}")
-    borrador.update(estado="emitida", nota=nota.strip(), emitido=_ahora(), actualizado=_ahora())
-    return almacen.guardar_borrador(borrador)
+        decidir(caso_id, "corregir",
+                f"Liquidación rectificada emitida ({borrador['id']} v{version}, {autor}). {nota.strip()}")
+    borrador.update(estado="emitida", nota=nota.strip(), emitido=_ahora(), actualizado=_ahora(), autor=autor)
+    return almacen.guardar_borrador(borrador, _evento("liquidacion_emitida", borrador, {
+        "nota": nota.strip(),
+        "liquido_anterior": (anterior or borrador["original"])["liquido_a_pagar"],
+        "cambios": diff_liquidaciones(anterior or borrador["original"], liquidacion)["cambios"],
+    }))
+
+
+def historial(id_: str) -> list[dict]:
+    """Todo lo que pasó con la liquidación del periodo: propuestas, ajustes, emisiones y reemplazos."""
+    borrador = almacen.obtener_borrador(id_)
+    if borrador is None:
+        raise LookupError(f"No existe el borrador {id_}.")
+    return almacen.listar_bitacora(borrador["worker_id"], borrador["periodo"])
+
+
+def comparar(id_: str, base: str = "emitida") -> dict:
+    """Diff entre la liquidación emitida (o una versión anterior de la propuesta) y la versión actual."""
+    borrador = almacen.obtener_borrador(id_)
+    if borrador is None:
+        raise LookupError(f"No existe el borrador {id_}.")
+    actual = f"Propuesta v{borrador['version']}" + (" (emitida)" if borrador["estado"] == "emitida" else "")
+    if base == "emitida":
+        antes, etiqueta = borrador["original"], "Liquidación emitida"
+    else:
+        try:
+            numero = int(str(base).lstrip("v"))
+        except ValueError as e:
+            raise ValueError("Compara contra 'emitida' o un número de versión.") from e
+        registro = next((e["datos"]["propuesta"] for e in reversed(historial(id_))
+                         if e["datos"].get("version") == numero and "propuesta" in e["datos"]), None)
+        if registro is None:
+            raise LookupError(f"No hay registro de la versión v{numero}.")
+        antes, etiqueta = registro, f"Propuesta v{numero}"
+    diff = diff_liquidaciones(antes, borrador["propuesta"], etiqueta, actual)
+    motivos = {a["concepto"]: a["motivo"] for a in borrador.get("ajustes") or []}
+    nombre = (borrador.get("trabajador") or {}).get("nombre") or borrador["worker_id"]
+    diff["en_simple"] = en_simple(diff, antes, borrador["propuesta"], motivos, nombre, etiqueta)
+    return diff
+
+
+def en_simple(diff: dict, antes: dict, despues: dict, motivos: dict[str, str], nombre: str,
+              referencia: str) -> dict:
+    """El mismo diff contado para alguien que no lee tablas: cuánto cambia el pago y por qué."""
+    primero = nombre.split()[0]
+    delta = diff["diferencia_liquido"]
+    if delta > 0:
+        titular = f"{primero} recibiría {_clp(delta)} más que en la {referencia.lower()}."
+    elif delta < 0:
+        titular = f"{primero} recibiría {_clp(-delta)} menos que en la {referencia.lower()}."
+    else:
+        titular = f"El monto que recibe {primero} no cambia respecto de la {referencia.lower()}."
+    puntos = []
+    for cambio in diff["cambios"]:
+        a, d, concepto = cambio["antes"], cambio["despues"], cambio["concepto"]
+        descuento = cambio["seccion"] == "Descuentos legales"
+        if a is None:
+            texto, favorece = f"Se agrega **{concepto}** por {_clp(d)}.", not descuento
+        elif d is None:
+            texto, favorece = f"Se quita **{concepto}**, que era de {_clp(a)}.", descuento
+        elif d == a:
+            continue
+        else:
+            verbo = "sube" if d > a else "baja"
+            sujeto = f"El descuento de **{concepto}**" if descuento else f"**{concepto}**"
+            texto = f"{sujeto} {verbo} de {_clp(a)} a {_clp(d)} ({_clp(abs(d - a))} {'más' if d > a else 'menos'})."
+            favorece = (d < a) if descuento else (d > a)
+        puntos.append({"texto": texto, "por_que": _motivo_simple(motivos.get(concepto)),
+                       "favorece_al_trabajador": favorece})
+    sin_cambio = sum(len(antes.get(g) or []) for g in ("haberes_imponibles", "haberes_no_imponibles",
+                                                       "descuentos_legales")) - len(
+        [c for c in diff["cambios"] if c["antes"] is not None and c["antes"] != c["despues"]])
+    return {
+        "titular": titular,
+        "liquido_antes": antes.get("liquido_a_pagar", 0),
+        "liquido_despues": despues.get("liquido_a_pagar", 0),
+        "puntos": puntos,
+        "pie": (f"El resto de la liquidación ({sin_cambio} conceptos) queda igual." if sin_cambio > 0
+                else "Todos los conceptos cambian."),
+    }
+
+
+def diff_liquidaciones(antes: dict, despues: dict, etiqueta_antes: str = "antes",
+                       etiqueta_despues: str = "después") -> dict:
+    """Diff línea por línea, como un diff de código: '-' lo que sale, '+' lo que entra, ' ' sin cambio."""
+    lineas = [f"--- {etiqueta_antes}", f"+++ {etiqueta_despues}"]
+    cambios = []
+    ancho = max([len(x["concepto"]) for liq in (antes, despues)
+                 for g in ("haberes_imponibles", "haberes_no_imponibles", "descuentos_legales")
+                 for x in liq.get(g) or []] + [len("Total descuentos")]) + 2
+    secciones = (("Haberes imponibles", "haberes_imponibles", lambda h: _linea_haber(h, ancho)),
+                 ("Haberes no imponibles", "haberes_no_imponibles", lambda h: _linea_haber(h, ancho)),
+                 ("Descuentos legales", "descuentos_legales", lambda d: _linea_descuento(d, ancho)))
+    for titulo, grupo, formato in secciones:
+        lineas.append(f"@@ {titulo} @@")
+        a = {_clave(x): x for x in antes.get(grupo) or []}
+        d = {_clave(x): x for x in despues.get(grupo) or []}
+        for clave in list(a) + [c for c in d if c not in a]:
+            viejo, nuevo = a.get(clave), d.get(clave)
+            if viejo is not None and nuevo is not None and formato(viejo) == formato(nuevo):
+                lineas.append(f"  {formato(nuevo)}")
+                continue
+            if viejo is not None:
+                lineas.append(f"- {formato(viejo)}")
+            if nuevo is not None:
+                lineas.append(f"+ {formato(nuevo)}")
+            cambios.append({"seccion": titulo, "concepto": (nuevo or viejo)["concepto"],
+                            "antes": viejo["monto"] if viejo else None,
+                            "despues": nuevo["monto"] if nuevo else None})
+    lineas.append("@@ Totales @@")
+    for etiqueta, campo in (("Total haberes", "total_haberes"), ("Total descuentos", "total_descuentos"),
+                            ("Líquido a pagar", "liquido_a_pagar")):
+        v_antes, v_despues = antes.get(campo, 0), despues.get(campo, 0)
+        if v_antes == v_despues:
+            lineas.append(f"  {etiqueta:<{ancho}}{_clp(v_despues):>12}")
+        else:
+            lineas.append(f"- {etiqueta:<{ancho}}{_clp(v_antes):>12}")
+            lineas.append(f"+ {etiqueta:<{ancho}}{_clp(v_despues):>12}")
+    liquido = despues.get("liquido_a_pagar", 0) - antes.get("liquido_a_pagar", 0)
+    return {"texto": "\n".join(lineas), "cambios": cambios, "diferencia_liquido": liquido,
+            "etiquetas": [etiqueta_antes, etiqueta_despues]}
+
+
+_MOTIVOS_SIMPLES = {
+    "Base limitada al tope imponible del periodo.":
+        "la AFP y la salud se cobran solo hasta un sueldo máximo que fija la ley (el tope imponible). "
+        "Antes se cobraban sobre el sueldo completo.",
+    "Base tributable recalculada con las cotizaciones corregidas.":
+        "al descontar menos AFP y salud, queda más sueldo sobre el que se paga impuesto.",
+    "Recalculado con la ficha vigente y los parámetros del periodo.":
+        "se volvió a calcular con el contrato vigente y los valores legales del mes.",
+    "Resultado de los ajustes anteriores.": "",
+}
+
+
+def _motivo_simple(motivo: str | None) -> str:
+    if not motivo:
+        return ""
+    if motivo in _MOTIVOS_SIMPLES:
+        return _MOTIVOS_SIMPLES[motivo]
+    if motivo.startswith("Contrato plazo fijo"):
+        return "con contrato a plazo fijo, el seguro de cesantía lo paga solo el empleador."
+    if motivo.startswith("25% de la remuneración"):
+        return "la gratificación legal es un 25% del sueldo, con un máximo anual que fija la ley."
+    if "atenciones registradas" in motivo:
+        return f"el bono depende de cumplir la meta de atenciones ({motivo.rstrip('.')})."
+    return motivo[:1].lower() + motivo[1:]
+
+
+def _clave(linea: dict) -> str:
+    return linea.get("codigo") or linea["concepto"]
+
+
+def _linea_haber(haber: dict, ancho: int) -> str:
+    return f"{haber['concepto']:<{ancho}}{_clp(haber['monto']):>12}"
+
+
+def _linea_descuento(linea: dict, ancho: int) -> str:
+    tasa = f" × {linea['tasa'] * 100:.2f}%".replace(".", ",") if linea.get("tasa") is not None else ""
+    return f"{linea['concepto']:<{ancho}}{_clp(linea['monto']):>12}  (base {_clp(linea.get('base'))}{tasa})"
+
+
+def _clp(n) -> str:
+    if n is None:
+        return "—"
+    return ("-" if n < 0 else "") + f"${abs(int(n)):,}".replace(",", ".")
+
+
+def _evento(accion: str, borrador: dict, extra: dict) -> dict:
+    return {"accion": accion, "autor": borrador["autor"], "datos": {
+        "borrador": borrador["id"], "version": borrador["version"],
+        "liquido": borrador["propuesta"]["liquido_a_pagar"],
+        "propuesta": copy.deepcopy(borrador["propuesta"]), **extra}}
+
+
+def _autor(autor: str | None) -> str:
+    return (str(autor or "").strip() or AUTOR_POR_DEFECTO)[:80]
 
 
 def listar() -> list[dict]:

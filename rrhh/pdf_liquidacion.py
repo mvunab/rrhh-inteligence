@@ -74,7 +74,10 @@ def pdf_borrador(borrador: dict) -> bytes:
         Paragraph(
             f"Descuentos legales calculados por el motor de RRHH Intelligence con UF {clp(params.get('uf'))} y "
             f"tope imponible {clp(params.get('tope_afp_salud'))}. Parámetros verificados el "
-            f"{params.get('verificados') or '—'}. Documento {borrador['id']} v{borrador.get('version', 1)}.",
+            f"{params.get('verificados') or '—'}. Documento {borrador['id']} v{borrador.get('version', 1)}, "
+            + (f"preparado por {borrador.get('autor') or 'RR.HH.'} el {borrador['actualizado'][:10]}."
+               if es_borrador else
+               f"emitido por {borrador.get('autor') or 'RR.HH.'} el {(borrador.get('emitido') or '')[:10]}."),
             estilos["pie"]),
     ]
     marca = _marca_borrador if es_borrador else _sin_marca

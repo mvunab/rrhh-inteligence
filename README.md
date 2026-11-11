@@ -42,7 +42,7 @@ El agente del trabajador tiene cuatro herramientas. El identificador de la perso
 - No hay inicio de sesión real. En el portal del trabajador la persona se elige en la barra lateral.
 - No lee PDF escaneados. Hace falta texto seleccionable.
 - No ejecuta pagos ni modifica el sistema de remuneraciones.
-- Buk está declarado como conector y responde que no está configurado. No hay integración con Defontana ni Talana.
+- Buk se lee pero no se escribe: trae trabajadores y liquidaciones del mes, y recibe webhooks de fichas. Sin `BUK_TOKEN` responde una instancia de demostración con el formato de su API. No hay integración con Defontana ni Talana.
 - No hay consola de administración de usuarios, roles ni grupos.
 - No modela instrumentos colectivos como entidad propia. El reglamento y la política de bonos están en el corpus compartido.
 - El agente no recuerda la conversación. Cada pregunta es un turno nuevo. El historial de la pantalla no se reenvía al modelo.
@@ -148,7 +148,7 @@ El documento de visión está en el origen de este README. El estado frente a es
 | 1. Trabajadores, documentos y permisos | Trabajadores, contratos, anexos y vigencia están en PostgreSQL. Falta identidad y permisos. |
 | 2. Ingesta y datos estructurados | Excel y PDF con texto ya cargan liquidaciones. El cálculo compara contra la ficha vigente. Falta OCR y revisión de campos dudosos antes de darlos por confirmados. |
 | 3. Consultas con fuentes | El portal del trabajador y la explicación de un caso ya usan el harness. Falta memoria de conversación y evaluación continua fuera de la suite de tests. |
-| 4. ERP | El conector Buk está reservado y apagado. Defontana y Talana no están. |
+| 4. ERP | Buk sincroniza trabajadores y liquidaciones (`POST /cargas/buk`) y recibe webhooks (`POST /webhooks/buk`). Falta probarlo con un token real. Defontana y Talana no están. |
 
 ## Estructura
 
@@ -158,7 +158,7 @@ app/         Portal del trabajador (Streamlit).
 rrhh/        Portal de RR. HH. (Streamlit) y reglas de la bandeja.
 cliente/     Cliente HTTP que usan los dos portales.
 harness/     Agente, tools, cálculo, almacén y retriever.
-fuentes/     Excel, PDF de liquidación, contrato, anexo. Buk sin configurar.
+fuentes/     Excel, PDF de liquidación, contrato, anexo y Buk (API o demostración).
 agent/       Instrucciones, manifiesto y contrato de salida.
 data/        Semilla de una base vacía y parámetros normativos.
 tests/       Suite offline.

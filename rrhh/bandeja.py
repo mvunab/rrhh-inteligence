@@ -95,9 +95,44 @@ def listar_bandeja() -> list[dict]:
             caso = almacen.obtener_caso(clave)
             filas[clave] = _fila_bandeja(solicitud["worker_id"], solicitud["periodo"], fichas) | {"caso": caso}
         filas[clave]["solicitudes"].append(solicitud)
-    return sorted((_resumir(f) for f in filas.values()),
+    resumidas = [_resumir(f) for f in filas.values()]
+    _agrupar(resumidas)
+    return sorted(resumidas,
                   key=lambda f: (f["estado"] != "pendiente", f["tipo"] != "diferencia", -abs(f["diferencia_total"]),
                                  f["id"]))
+
+
+def _agrupar(filas: list[dict]) -> None:
+    """Marca las liquidaciones del mismo trabajador con el mismo error en varios meses.
+
+    Mismo error = los mismos conceptos con diferencia y en la misma dirección. Cada mes sigue siendo
+    su propia liquidación (se corrige y emite por separado); el grupo es para revisarlas juntas.
+    """
+    grupos: dict[tuple, list[dict]] = {}
+    for fila in filas:
+        firma = fila.pop("_firma")
+        fila["grupo"] = None
+        if firma:
+            grupos.setdefault((fila["worker_id"], firma), []).append(fila)
+    for (worker_id, firma), miembros in grupos.items():
+        if len(miembros) < 2:
+            continue
+        miembros.sort(key=lambda f: f["periodo"] or "")
+        ultimo = miembros[-1]
+        grupo = {
+            "id": f"{worker_id}-" + "+".join(codigo for codigo, _ in firma),
+            "periodos": [f["periodo"] for f in miembros],
+            "casos": [f["caso_id"] for f in miembros],
+            "conceptos": ultimo["_conceptos"],
+            "causa": ultimo["_causa"],
+            "diferencia_total": sum(f["diferencia_total"] for f in miembros),
+            "pendientes": sum(f["estado"] == "pendiente" for f in miembros),
+        }
+        for fila in miembros:
+            fila["grupo"] = grupo
+    for fila in filas:
+        fila.pop("_conceptos", None)
+        fila.pop("_causa", None)
 
 
 def _fila_bandeja(worker_id: str, periodo: str | None, fichas: dict) -> dict:
@@ -116,7 +151,11 @@ def _resumir(fila: dict) -> dict:
         origen.append("sistema")
     pendiente = (any(s["estado"] == "pendiente" for s in solicitudes)
                  or bool(caso and con_diferencia and caso["estado"] == "pendiente"))
+    con_error = [l for l in (caso or {}).get("lineas", []) if l["estado"] == "diferencia"] if con_diferencia else []
     return fila | {
+        "_firma": tuple(sorted((l["codigo"], l["diferencia"] > 0) for l in con_error)),
+        "_conceptos": [l["concepto"] for l in con_error],
+        "_causa": next((l["causa_probable"] for l in con_error if l.get("causa_probable")), None),
         "caso_id": caso["id"] if caso else None,
         "tipo": "diferencia" if con_diferencia or any(s["tipo"] == "diferencia" for s in solicitudes)
                 else "revision",

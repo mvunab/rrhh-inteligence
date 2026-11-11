@@ -29,25 +29,101 @@ def _pdf(texto: str) -> bytes:
     return pdf_de_paginas([[texto]])
 
 
+def test_cada_trabajador_tiene_el_pdf_de_su_contrato(api):
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    for worker_id, nombre in (("W001", "Camila"), ("W002", "Tomás"), ("W003", "Valentina"), ("W004", "Diego")):
+        res = api.get(f"/trabajadores/{worker_id}/contrato.pdf")
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "application/pdf"
+        texto = "\n".join(p.extract_text() or "" for p in PdfReader(BytesIO(res.content)).pages)
+        assert nombre in texto
+        assert "CLÁUSULA" in texto
+    assert api.get("/trabajadores/W999/contrato.pdf").status_code == 404
+
+
+def test_documentos_contrato_incluye_texto_y_anexos(api):
+    docs = api.get("/trabajadores/W001/documentos-contrato").json()
+    assert docs
+    assert docs[0]["tipo"] == "contrato"
+    assert "Camila" in docs[0]["contenido"] or "CLÁUSULA" in docs[0]["contenido"]
+    assert all("contenido" in d for d in docs)
+    assert api.get("/trabajadores/W999/documentos-contrato").status_code == 404
+
+
+def test_leer_contrato_propone_sin_persistir_y_confirmar_aplica(api):
+    antes = api.get("/trabajadores/W001/documentos-contrato").json()
+    texto = (
+        "El empleador pagara al trabajador un sueldo base mensual de $1.200.000. "
+        "El trabajador declara estar afiliado a la AFP ProVida y al sistema de salud Fonasa. "
+        "El presente contrato es de duracion indefinida. "
+        "Se pacta un bono de productividad mensual de $200.000 condicionado a la meta de 130 atenciones."
+    )
+    lectura = api.post(
+        "/cargas/contrato/leer",
+        data={"worker_id": "W001", "vigente_desde": "2026-11-01"},
+        files={"archivo": ("c.pdf", _pdf(texto), "application/pdf")},
+    )
+    assert lectura.status_code == 200, lectura.text
+    cuerpo = lectura.json()
+    assert cuerpo["cambios_sugeridos"]["sueldo_base"] == 1_200_000
+    assert cuerpo["cambios_sugeridos"]["afp"] == "ProVida"
+    assert cuerpo["preview_descuentos"]["propuesta"]["imponible"] > 0
+    assert api.get("/trabajadores/W001/documentos-contrato").json() == antes
+
+    confirmado = api.post(
+        "/cargas/pdf",
+        data={
+            "worker_id": "W001",
+            "vigente_desde": "2026-11-01",
+            "cambios": json.dumps(cuerpo["cambios_sugeridos"]),
+        },
+        files={"archivo": ("c.pdf", _pdf(texto), "application/pdf")},
+    )
+    assert confirmado.status_code == 200, confirmado.text
+    vigente = {c["worker_id"]: c for c in confirmado.json()["contratos"]}["W001"]
+    assert vigente["ficha"]["sueldo_base"] == 1_200_000
+    assert vigente["ficha"]["afp"] == "ProVida"
+    assert vigente["origen"] == "cargado"
+    docs = api.get("/trabajadores/W001/documentos-contrato").json()
+    assert any(d["tipo"] == "contrato" and d["origen"] == "cargado" for d in docs)
+
+
+def test_leer_anexo_propone_afp_sin_guardar(api):
+    antes = len(api.get("/trabajadores/W001/documentos-contrato").json())
+    texto = "Anexo: el trabajador pasa a la AFP Modelo a contar de esta fecha."
+    r = api.post(
+        "/cargas/anexo/leer",
+        data={"worker_id": "W001", "vigente_desde": "2026-10-15", "descripcion": "cambio AFP"},
+        files={"archivo": ("a.pdf", _pdf(texto), "application/pdf")},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["cambios_sugeridos"]["afp"] == "Modelo"
+    assert len(api.get("/trabajadores/W001/documentos-contrato").json()) == antes
+    assert api.get("/trabajadores/W001").json()["ficha"]["afp"] == "Habitat"
+
+
+def test_salud_trabajadores_y_conectores(api, monkeypatch):
+    monkeypatch.delenv("BUK_TOKEN", raising=False)
+    assert api.get("/salud").json()["ok"] is True
+    assert "W001" in {t["worker_id"] for t in api.get("/trabajadores").json()}
+    conectores = {c["nombre"]: (c["disponible"], c["modo"]) for c in api.get("/conectores").json()}
+    assert conectores == {"Excel": (True, None), "PDF liquidación": (True, None), "PDF": (True, None),
+                          "Buk": (True, "demo")}
+
+
 def test_login_y_perfil_del_analista(api):
     yo = api.get("/auth/me").json()
     assert yo["email"] == "analista@clinica.local"
-    assert yo["nombre"]
+    assert yo["nombre"] == "Paula Soto"
     actualizado = api.put("/auth/me", json={"cargo": "Jefa de remuneraciones", "area": "RR.HH."}).json()
     assert actualizado["cargo"] == "Jefa de remuneraciones"
-    assert actualizado["area"] == "RR.HH."
     with TestClient(app) as crudo:
+        assert crudo.get("/bandeja").status_code == 401
         assert crudo.post("/auth/login", json={"email": "analista@clinica.local", "password": "mal"}).status_code == 401
-
-
-def test_salud_trabajadores_y_buk_sin_llamada(api):
-    assert api.get("/salud").json()["ok"] is True
-    assert "W001" in {t["worker_id"] for t in api.get("/trabajadores").json()}
-    buk = api.post("/cargas/buk")
-    assert buk.status_code == 503
-    assert "configurado" in buk.json()["detail"]
-    conectores = {c["nombre"]: c["disponible"] for c in api.get("/conectores").json()}
-    assert conectores == {"Excel": True, "PDF liquidación": True, "PDF": True, "Buk": False}
+    assert api.post("/cargas/buk", json={"periodo": "2026-13"}).status_code == 422
 
 
 def test_excel_abre_caso_y_la_decision_queda_en_la_base(api):
@@ -171,6 +247,7 @@ def test_el_pedido_en_el_mensaje_abre_solicitud_aunque_el_agente_no_la_marque(ap
     assert [m["texto"] for m in otra["mensajes"]] == [
         "Solicito que recursos humanos revise mi liquidación.",
         "Quiero hablar con una persona de RR.HH. sobre septiembre."]
+    assert all("cuadra" in m["agente"] for m in otra["mensajes"])
     assert len(api.get("/solicitudes").json()) == 1
 
 
@@ -231,22 +308,50 @@ def test_el_recalculo_propone_ajusta_y_emite_la_liquidacion_corregida(api):
         "haberes_imponibles": imponibles,
         "haberes_no_imponibles": borrador["propuesta"]["haberes_no_imponibles"],
         "nota": "Bono especial aprobado por jefatura.",
+        "autor": "Paula Soto",
     }).json()
     especial = next(a for a in ajustado["ajustes"] if a["concepto"] == "Bono especial")
     assert especial["motivo"] == "Bono especial aprobado por jefatura." and especial["propuesto"] == 100000
     assert "tope imponible" in next(a for a in ajustado["ajustes"] if a["concepto"] == "AFP Cuprum")["motivo"]
+    assert ajustado["version"] == borrador["version"] + 1 and ajustado["autor"] == "Paula Soto"
 
-    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": ""}).status_code == 422
-    emitido = api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "Se aplica tope imponible."})
+    diff = api.get(f"/borradores/{borrador['id']}/diff").json()
+    assert diff["texto"].startswith("--- Liquidación emitida\n+++ Propuesta v2")
+    assert any(l.startswith("+ Bono especial") for l in diff["texto"].splitlines())
+    assert any(l.startswith("- AFP Cuprum") for l in diff["texto"].splitlines())
+    assert any(l.startswith("  Sueldo base") for l in diff["texto"].splitlines())
+    simple = diff["en_simple"]
+    assert simple["titular"].startswith("Valentina recibiría") and "más" in simple["titular"]
+    afp = next(p for p in simple["puntos"] if "AFP Cuprum" in p["texto"] and "baja" in p["texto"])
+    assert afp["favorece_al_trabajador"] is True and "sueldo máximo" in afp["por_que"]
+    especial = next(p for p in simple["puntos"] if "Bono especial" in p["texto"])
+    assert especial["texto"].startswith("Se agrega") and "jefatura" in especial["por_que"]
+    entre_versiones = api.get(f"/borradores/{borrador['id']}/diff", params={"base": "1"}).json()
+    assert [c["concepto"] for c in entre_versiones["cambios"] if c["seccion"].startswith("Haberes")] == ["Bono especial"]
+    assert api.get(f"/borradores/{borrador['id']}/diff", params={"base": "9"}).status_code == 404
+
+    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "", "version": 2}).status_code == 422
+    vieja = api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "Tope.", "version": 1})
+    assert vieja.status_code == 409 and "v2" in vieja.json()["detail"]
+    emitido = api.post(f"/borradores/{borrador['id']}/emision",
+                       json={"nota": "Se aplica tope imponible.", "version": 2, "autor": "Paula Soto"})
     assert emitido.status_code == 200, emitido.text
     assert emitido.json()["estado"] == "emitida"
+
+    eventos = api.get(f"/borradores/{borrador['id']}/historial").json()
+    assert [e["accion"] for e in eventos] == ["propuesta_generada", "propuesta_ajustada",
+                                              "liquidacion_reemplazada", "liquidacion_emitida"]
+    reemplazo = eventos[2]
+    assert reemplazo["autor"] == "Paula Soto" and reemplazo["datos"]["version"] == 2
+    assert reemplazo["datos"]["anterior"]["liquido_a_pagar"] == borrador["original"]["liquido_a_pagar"]
+    assert eventos[3]["datos"]["liquido_anterior"] == borrador["original"]["liquido_a_pagar"]
     vigente = api.get("/trabajadores/W003/liquidacion", params={"periodo": "2026-09"}).json()
     assert vigente["liquido_a_pagar"] == ajustado["propuesta"]["liquido_a_pagar"]
     caso = api.get("/casos/W003-2026-09").json()
     assert caso["estado"] == "corregir" and caso["hay_diferencias"] is False
     origen = next(l for l in api.get("/liquidaciones").json() if l["worker_id"] == "W003" and l["periodo"] == "2026-09")
     assert origen["origen"] == "rectificada"
-    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "otra vez"}).status_code == 409
+    assert api.post(f"/borradores/{borrador['id']}/emision", json={"nota": "otra vez", "version": 2}).status_code == 409
     texto = "\n".join(p.extract_text() for p in PdfReader(BytesIO(api.get(f"/borradores/{borrador['id']}/pdf").content)).pages)
     assert "BORRADOR" not in texto and "Liquidación rectificada" in texto
 

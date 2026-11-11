@@ -19,6 +19,7 @@ from sqlalchemy import (
     Column,
     Date,
     DateTime,
+    Integer,
     MetaData,
     String,
     Table,
@@ -93,6 +94,18 @@ borradores = Table(
     Column("datos", _JSON, nullable=False),
 )
 
+# Solo se agregan filas. Cada cambio a una liquidación o a su propuesta queda aquí con su versión.
+bitacora = Table(
+    "bitacora", meta,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("worker_id", String(16), nullable=False, index=True),
+    Column("periodo", String(7), nullable=False),
+    Column("accion", String(32), nullable=False),
+    Column("autor", String(80), nullable=False),
+    Column("cuando", DateTime(timezone=True), nullable=False),
+    Column("datos", _JSON, nullable=False),
+)
+
 analistas = Table(
     "analistas", meta,
     Column("id", String(36), primary_key=True),
@@ -105,8 +118,6 @@ analistas = Table(
     Column("avatar", Text, nullable=True),
     Column("creado", DateTime(timezone=True), nullable=False),
 )
-
-
 
 # Campos de la ficha que un contrato o un anexo puede cambiar.
 CAMPOS_FICHA = {
@@ -208,6 +219,18 @@ def fichas_base() -> dict[str, dict]:
     return {f.worker_id: f.ficha for f in filas}
 
 
+def guardar_ficha(worker_id: str, ficha: dict) -> None:
+    """Crea o reemplaza la ficha base. Los contratos y anexos se siguen aplicando encima."""
+    with motor().begin() as cx:
+        cx.execute(delete(trabajadores).where(trabajadores.c.worker_id == worker_id))
+        cx.execute(insert(trabajadores).values(worker_id=worker_id, ficha={**ficha, "worker_id": worker_id}))
+
+
+def nuevo_worker_id() -> str:
+    numeros = [int(w[1:]) for w in fichas_base() if re.fullmatch(r"W\d+", w)]
+    return f"W{max(numeros, default=0) + 1:03d}"
+
+
 def _corte(periodo: str | None) -> date:
     """Último día del periodo AAAA-MM. Sin periodo, hoy."""
     if not periodo:
@@ -293,13 +316,14 @@ def corpus() -> list[dict]:
 
 
 def guardar_documento(nombre: str, worker_id: str, doc_type: str, contenido: str, *,
-                      vigente_desde: date | None, descripcion: str = "", cambios: dict | None = None) -> None:
+                      vigente_desde: date | None, descripcion: str = "", cambios: dict | None = None,
+                      origen: str = "cargado") -> None:
     with motor().begin() as cx:
         cx.execute(delete(documentos).where(documentos.c.nombre == nombre))
         cx.execute(insert(documentos).values(
             nombre=nombre, worker_id=worker_id, doc_type=doc_type, contenido=contenido,
             vigente_desde=vigente_desde, descripcion=descripcion, cambios=cambios or {},
-            origen="cargado", cargado=_ahora(),
+            origen=origen, cargado=_ahora(),
         ))
 
 
@@ -308,7 +332,18 @@ def existe_documento(nombre: str) -> bool:
         return cx.execute(select(documentos.c.nombre).where(documentos.c.nombre == nombre)).first() is not None
 
 
-def documentos_de_contrato(worker_id: str) -> list[dict]:
+def contenido_contrato(worker_id: str) -> str | None:
+    """Texto del contrato vigente. None si esa persona no tiene uno."""
+    with motor().connect() as cx:
+        fila = cx.execute(
+            select(documentos.c.contenido)
+            .where(documentos.c.worker_id == worker_id, documentos.c.doc_type == "contrato")
+            .order_by(documentos.c.nombre)
+        ).first()
+    return fila.contenido if fila else None
+
+
+def documentos_de_contrato(worker_id: str, *, con_contenido: bool = False) -> list[dict]:
     with motor().connect() as cx:
         filas = cx.execute(
             select(documentos)
@@ -319,8 +354,22 @@ def documentos_de_contrato(worker_id: str) -> list[dict]:
         "documento": f.nombre, "tipo": f.doc_type, "origen": f.origen,
         "vigente_desde": _iso(f.vigente_desde), "descripcion": f.descripcion,
         "cambios": f.cambios or {}, "cargado": _iso(f.cargado),
+        **({"contenido": f.contenido} if con_contenido else {}),
     } for f in filas]
-    return sorted(salida, key=lambda d: (d["vigente_desde"] or "", d["tipo"] == "anexo", d["documento"]))
+    return sorted(salida, key=lambda d: (d["tipo"] != "contrato", d["vigente_desde"] or "", d["documento"]))
+
+
+def documentos_compartidos() -> list[dict]:
+    with motor().connect() as cx:
+        filas = cx.execute(
+            select(documentos)
+            .where(documentos.c.worker_id == TODOS_LOS_TRABAJADORES)
+            .order_by(documentos.c.doc_type, documentos.c.nombre)
+        ).all()
+    return [{
+        "documento": f.nombre, "tipo": f.doc_type, "origen": f.origen,
+        "descripcion": f.descripcion, "cargado": _iso(f.cargado),
+    } for f in filas]
 
 
 # ------------------------------------------------------------------ liquidaciones
@@ -339,12 +388,21 @@ def resumen_liquidaciones() -> list[dict]:
              "liquido_a_pagar": f.datos.get("liquido_a_pagar")} for f in filas]
 
 
-def guardar_liquidaciones(nuevas: list[dict], origen: str) -> None:
+def guardar_liquidaciones(nuevas: list[dict], origen: str, autor: str = "sistema",
+                          detalle: dict | None = None) -> None:
+    """Guarda o reemplaza la liquidación del periodo. La que se reemplaza queda en la bitácora."""
     ahora = _ahora()
     with motor().begin() as cx:
         for liq in nuevas:
-            cx.execute(delete(liquidaciones).where(liquidaciones.c.worker_id == liq["worker_id"])
-                       .where(liquidaciones.c.periodo == liq["periodo"]))
+            filtro = ((liquidaciones.c.worker_id == liq["worker_id"]) & (liquidaciones.c.periodo == liq["periodo"]))
+            previa = cx.execute(select(liquidaciones).where(filtro)).first()
+            if previa is not None and previa.datos != liq:
+                cx.execute(insert(bitacora).values(
+                    worker_id=liq["worker_id"], periodo=liq["periodo"], accion="liquidacion_reemplazada",
+                    autor=autor, cuando=ahora,
+                    datos={"anterior": previa.datos, "origen_anterior": previa.origen,
+                           "nueva": liq, "origen_nuevo": origen, **(detalle or {})}))
+            cx.execute(delete(liquidaciones).where(filtro))
             cx.execute(insert(liquidaciones).values(
                 worker_id=liq["worker_id"], periodo=liq["periodo"], datos=liq, origen=origen, cargado=ahora))
 
@@ -405,13 +463,28 @@ def obtener_borrador(borrador_id: str) -> dict | None:
     return fila.datos if fila else None
 
 
-def guardar_borrador(borrador: dict) -> dict:
+def guardar_borrador(borrador: dict, evento: dict | None = None) -> dict:
+    """Guarda el borrador y, en la misma transacción, el evento de la bitácora que lo cambió."""
     with motor().begin() as cx:
         cx.execute(delete(borradores).where(borradores.c.id == borrador["id"]))
         cx.execute(insert(borradores).values(
             id=borrador["id"], worker_id=borrador["worker_id"], periodo=borrador["periodo"],
             estado=borrador["estado"], datos=borrador))
+        if evento is not None:
+            cx.execute(insert(bitacora).values(
+                worker_id=borrador["worker_id"], periodo=borrador["periodo"], accion=evento["accion"],
+                autor=evento["autor"], cuando=_ahora(), datos=evento.get("datos") or {}))
     return borrador
+
+
+# ------------------------------------------------------------------ bitácora
+def listar_bitacora(worker_id: str, periodo: str) -> list[dict]:
+    with motor().connect() as cx:
+        filas = cx.execute(select(bitacora).where(bitacora.c.worker_id == worker_id)
+                           .where(bitacora.c.periodo == periodo).order_by(bitacora.c.id)).all()
+    return [{"id": f.id, "accion": f.accion, "autor": f.autor, "cuando": f.cuando.isoformat(),
+             "datos": f.datos} for f in filas]
+
 
 # ------------------------------------------------------------------ analistas RR.HH.
 def _fila_analista(fila) -> dict:
@@ -484,4 +557,3 @@ def actualizar_analista(analista_id: str, *, nombre: str | None = None, cargo: s
     with motor().begin() as cx:
         cx.execute(update(analistas).where(analistas.c.id == analista_id).values(**valores))
     return obtener_analista(analista_id)  # type: ignore[return-value]
-

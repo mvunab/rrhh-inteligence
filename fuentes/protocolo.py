@@ -15,6 +15,7 @@ class ResultadoCarga:
     resumen: str
     liquidaciones: list[dict] = field(default_factory=list)
     documento: dict | None = None
+    trabajadores: list[dict] = field(default_factory=list)
 
 
 class Conector(Protocol):
@@ -23,4 +24,4 @@ class Conector(Protocol):
     detalle: str
 
     def cargar(self, contenido: bytes, **opciones) -> ResultadoCarga:
-        """Lee el origen. Buk, no configurado, lanza ErrorCarga."""
+        """Lee el origen. Si el archivo o el sistema externo no sirven, lanza ErrorCarga."""
