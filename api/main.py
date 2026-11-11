@@ -14,6 +14,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
+from api.deps import Analista
 from fuentes import listar
 from fuentes.buk import BukConector
 from fuentes.contratos import contratos_vigentes
@@ -21,6 +22,7 @@ from fuentes.excel import plantilla_bytes
 from fuentes.muestras import listar_muestras, obtener_muestra
 from fuentes.protocolo import ErrorCarga
 from harness import almacen, datos
+from harness.auth import emitir_token, verificar_password
 from harness.config import Settings
 from harness.ingest import asegurar_indice, estado_indice
 from harness.llm_factory import crear_embeddings, descripcion
@@ -49,6 +51,7 @@ from rrhh.servicio import (
 async def _inicio(_app: FastAPI):
     almacen.motor()  # crea las tablas y siembra la base vacía
     almacen.completar_areas()
+    almacen.asegurar_analistas()
     abrir_casos_faltantes()
     yield
 
@@ -129,6 +132,18 @@ class RespuestaAnalista(BaseModel):
         return limpio
 
 
+class Login(BaseModel):
+    email: str = Field(min_length=3)
+    password: str = Field(min_length=1)
+
+
+class PerfilActualizar(BaseModel):
+    nombre: str | None = Field(None, min_length=1, max_length=120)
+    cargo: str | None = Field(None, max_length=120)
+    area: str | None = Field(None, max_length=120)
+    telefono: str | None = Field(None, max_length=40)
+
+
 def _error_carga(e: ErrorCarga) -> HTTPException:
     return HTTPException(400, str(e))
 
@@ -151,8 +166,54 @@ def salud() -> dict:
     return {"ok": True, "servicio": "liquidaciones"}
 
 
+# ------------------------------------------------------------------ autenticación analistas
+@app.post("/auth/login")
+def login(cuerpo: Login) -> dict:
+    fila = almacen.obtener_analista_por_email(cuerpo.email)
+    if fila is None or not verificar_password(cuerpo.password, fila["password_hash"]):
+        raise HTTPException(401, "Correo o contraseña incorrectos.")
+    token = emitir_token(fila["id"])
+    perfil = {k: v for k, v in fila.items() if k != "password_hash"}
+    return {"token": token, "analista": perfil}
+
+
+@app.post("/auth/logout")
+def logout(_analista: Analista) -> dict:
+    return {"ok": True}
+
+
+@app.get("/auth/me")
+def yo(analista: Analista) -> dict:
+    return analista
+
+
+@app.put("/auth/me")
+def actualizar_yo(cuerpo: PerfilActualizar, analista: Analista) -> dict:
+    return almacen.actualizar_analista(
+        analista["id"],
+        nombre=cuerpo.nombre,
+        cargo=cuerpo.cargo,
+        area=cuerpo.area,
+        telefono=cuerpo.telefono,
+    )
+
+
+@app.put("/auth/me/avatar")
+async def avatar_yo(analista: Analista, archivo: UploadFile = File(...)) -> dict:
+    tipo = (archivo.content_type or "").lower()
+    if tipo not in {"image/png", "image/jpeg", "image/webp"}:
+        raise HTTPException(400, "El avatar debe ser PNG, JPEG o WebP.")
+    bruto = await archivo.read()
+    if len(bruto) > 400_000:
+        raise HTTPException(400, "El avatar no puede superar los 400 KB.")
+    import base64
+    data_url = f"data:{tipo};base64,{base64.b64encode(bruto).decode('ascii')}"
+    return almacen.actualizar_analista(analista["id"], avatar=data_url)
+
+
+
 @app.get("/conectores")
-def conectores() -> list[dict]:
+def conectores(_analista: Analista) -> list[dict]:
     return [{"nombre": c.nombre, "disponible": c.disponible, "detalle": c.detalle} for c in listar()]
 
 
@@ -249,17 +310,17 @@ def envio_de_solicitud(worker_id: str, solicitud_id: str) -> dict:
 
 # ------------------------------------------------------------------ RR.HH.: solicitudes de los mensajes
 @app.get("/estadisticas/solicitudes")
-def estadisticas() -> list[dict]:
+def estadisticas(_analista: Analista) -> list[dict]:
     return estadisticas_solicitudes()
 
 
 @app.get("/solicitudes")
-def solicitudes() -> list[dict]:
+def solicitudes(_analista: Analista) -> list[dict]:
     return listar_solicitudes()
 
 
 @app.get("/solicitudes/{solicitud_id}")
-def solicitud(solicitud_id: str) -> dict:
+def solicitud(solicitud_id: str, _analista: Analista) -> dict:
     encontrada = obtener_solicitud(solicitud_id)
     if encontrada is None:
         raise HTTPException(404, "No existe la solicitud.")
@@ -267,7 +328,7 @@ def solicitud(solicitud_id: str) -> dict:
 
 
 @app.post("/solicitudes/{solicitud_id}/respuesta")
-def respuesta_de_analista(solicitud_id: str, cuerpo: RespuestaAnalista) -> dict:
+def respuesta_de_analista(solicitud_id: str, cuerpo: RespuestaAnalista, analista: Analista) -> dict:
     try:
         return responder_solicitud(solicitud_id, cuerpo.respuesta)
     except ValueError as e:
@@ -276,18 +337,18 @@ def respuesta_de_analista(solicitud_id: str, cuerpo: RespuestaAnalista) -> dict:
 
 # ------------------------------------------------------------------ RR.HH.: casos
 @app.get("/bandeja")
-def bandeja() -> list[dict]:
+def bandeja(_analista: Analista) -> list[dict]:
     """Una fila por liquidación en revisión: diferencias de cálculo y pedidos de revisión humana."""
     return listar_bandeja()
 
 
 @app.get("/casos")
-def casos() -> list[dict]:
+def casos(_analista: Analista) -> list[dict]:
     return listar_casos()
 
 
 @app.get("/casos/{caso_id}")
-def caso(caso_id: str) -> dict:
+def caso(caso_id: str, _analista: Analista) -> dict:
     encontrado = obtener_caso(caso_id)
     if encontrado is None:
         raise HTTPException(404, "No existe el caso.")
@@ -295,7 +356,7 @@ def caso(caso_id: str) -> dict:
 
 
 @app.post("/casos/{caso_id}/decision")
-def decision(caso_id: str, cuerpo: Decision) -> dict:
+def decision(caso_id: str, cuerpo: Decision, _analista: Analista) -> dict:
     try:
         return decidir(caso_id, cuerpo.estado, cuerpo.nota)
     except ValueError as e:
@@ -303,7 +364,7 @@ def decision(caso_id: str, cuerpo: Decision) -> dict:
 
 
 @app.post("/casos/{caso_id}/explicacion")
-def explicacion(caso_id: str) -> dict:
+def explicacion(caso_id: str, _analista: Analista) -> dict:
     try:
         return explicar_caso(caso_id)
     except ValueError as e:
@@ -312,12 +373,12 @@ def explicacion(caso_id: str) -> dict:
 
 # ------------------------------------------------------------------ RR.HH.: recálculo y borradores
 @app.get("/borradores")
-def borradores() -> list[dict]:
+def borradores(_analista: Analista) -> list[dict]:
     return recalculo.listar()
 
 
 @app.post("/borradores", status_code=201)
-def nuevo_borrador(cuerpo: NuevoBorrador) -> dict:
+def nuevo_borrador(cuerpo: NuevoBorrador, analista: Analista) -> dict:
     """Recalcula la liquidación emitida y guarda la propuesta como borrador."""
     try:
         return recalculo.generar(cuerpo.worker_id, cuerpo.periodo)
@@ -333,12 +394,12 @@ def _borrador_o_404(borrador_id: str) -> dict:
 
 
 @app.get("/borradores/{borrador_id}")
-def borrador(borrador_id: str) -> dict:
+def borrador(borrador_id: str, _analista: Analista) -> dict:
     return _borrador_o_404(borrador_id)
 
 
 @app.put("/borradores/{borrador_id}")
-def ajustar_borrador(borrador_id: str, cuerpo: AjusteBorrador) -> dict:
+def ajustar_borrador(borrador_id: str, cuerpo: AjusteBorrador, analista: Analista) -> dict:
     try:
         return recalculo.ajustar(
             borrador_id,
@@ -353,7 +414,7 @@ def ajustar_borrador(borrador_id: str, cuerpo: AjusteBorrador) -> dict:
 
 
 @app.get("/borradores/{borrador_id}/pdf")
-def pdf_de_borrador(borrador_id: str) -> Response:
+def pdf_de_borrador(borrador_id: str, _analista: Analista) -> Response:
     encontrado = _borrador_o_404(borrador_id)
     archivo = f"liquidacion_{encontrado['worker_id']}_{encontrado['periodo']}_{encontrado['estado']}.pdf"
     return Response(content=pdf_borrador(encontrado), media_type="application/pdf",
@@ -361,7 +422,7 @@ def pdf_de_borrador(borrador_id: str) -> Response:
 
 
 @app.post("/borradores/{borrador_id}/emision")
-def emitir_borrador(borrador_id: str, cuerpo: Emision) -> dict:
+def emitir_borrador(borrador_id: str, cuerpo: Emision, analista: Analista) -> dict:
     """La propuesta reemplaza a la liquidación vigente y el caso queda como corregido."""
     try:
         return recalculo.emitir(borrador_id, cuerpo.nota)
@@ -373,18 +434,18 @@ def emitir_borrador(borrador_id: str, cuerpo: Emision) -> dict:
 
 # ------------------------------------------------------------------ RR.HH.: datos
 @app.get("/liquidaciones")
-def liquidaciones() -> list[dict]:
+def liquidaciones(_analista: Analista) -> list[dict]:
     """Liquidaciones en el almacén. El periodo sale del documento; origen base es la carga inicial."""
     return almacen.resumen_liquidaciones()
 
 
 @app.get("/contratos")
-def contratos() -> list[dict]:
+def contratos(_analista: Analista) -> list[dict]:
     return contratos_vigentes()
 
 
 @app.get("/plantilla/liquidaciones.xlsx")
-def plantilla() -> Response:
+def plantilla(_analista: Analista) -> Response:
     return Response(
         content=plantilla_bytes(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -393,12 +454,12 @@ def plantilla() -> Response:
 
 
 @app.get("/muestras")
-def muestras() -> list[dict]:
+def muestras(_analista: Analista) -> list[dict]:
     return listar_muestras()
 
 
 @app.get("/muestras/{muestra_id}")
-def muestra(muestra_id: str) -> Response:
+def muestra(muestra_id: str, _analista: Analista) -> Response:
     try:
         contenido, media, archivo = obtener_muestra(muestra_id)
     except ErrorCarga as e:

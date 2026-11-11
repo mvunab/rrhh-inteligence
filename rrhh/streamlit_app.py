@@ -466,7 +466,23 @@ def zona_sectores() -> None:
     )
 
 
+
+def _asegurar_sesion() -> bool:
+    """Login del analista demo (o ANALISTA_EMAIL / ANALISTA_PASSWORD)."""
+    if st.session_state.get("perfil_analista"):
+        return True
+    perfil = _llamar(cliente.autenticar)
+    if perfil is None:
+        st.error("No se pudo iniciar sesión en la API. Revisa ANALISTA_EMAIL y ANALISTA_PASSWORD.")
+        return False
+    st.session_state["perfil_analista"] = perfil
+    return True
+
+
 def main() -> None:
+    if not _asegurar_sesion():
+        return
+    perfil = st.session_state["perfil_analista"]
     st.title("Centro de control de RR.HH.")
     st.caption(f"Carga y decisiones pasan por la API en {base_url()}.")
     bandeja, sectores, carga, conectores = st.tabs(["Bandeja", "Sectores", "Cargar", "Conectores"])

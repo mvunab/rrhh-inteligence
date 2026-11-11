@@ -15,15 +15,29 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 @pytest.fixture()
 def api(monkeypatch, tmp_path):
+    from tests.conftest import autenticar_api
+
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     monkeypatch.setenv("EMBEDDINGS_PROVIDER", "mock")
     monkeypatch.setenv("CHROMA_DIR", str(tmp_path / "chroma"))
     with TestClient(app) as cliente:
+        autenticar_api(cliente)
         yield cliente
 
 
 def _pdf(texto: str) -> bytes:
     return pdf_de_paginas([[texto]])
+
+
+def test_login_y_perfil_del_analista(api):
+    yo = api.get("/auth/me").json()
+    assert yo["email"] == "analista@clinica.local"
+    assert yo["nombre"]
+    actualizado = api.put("/auth/me", json={"cargo": "Jefa de remuneraciones", "area": "RR.HH."}).json()
+    assert actualizado["cargo"] == "Jefa de remuneraciones"
+    assert actualizado["area"] == "RR.HH."
+    with TestClient(app) as crudo:
+        assert crudo.post("/auth/login", json={"email": "analista@clinica.local", "password": "mal"}).status_code == 401
 
 
 def test_salud_trabajadores_y_buk_sin_llamada(api):
