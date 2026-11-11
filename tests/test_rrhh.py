@@ -160,11 +160,9 @@ def test_los_cambios_desconocidos_se_rechazan():
         guardar_anexo(_pdf("x"), "W001", "2026-09-01", "", {"tipo_contrato": "honorarios"})
 
 
-def test_buk_no_esta_disponible():
-    conector = BukConector()
-    assert conector.disponible is False
-    with pytest.raises(ErrorCarga, match="está configurado"):
-        conector.cargar()
+def test_buk_pide_el_mes():
+    with pytest.raises(ErrorCarga, match="AAAA-MM"):
+        BukConector().cargar()
 
 
 def test_una_carga_reemplaza_la_liquidacion_del_mismo_periodo():

@@ -280,6 +280,14 @@ def panel_liquidacion(wid: str) -> None:
     area = f"{t['area']} · " if t.get("area") else ""
     st.caption(f"{t['nombre']} · {area}{t['cargo']} · contrato {t['tipo_contrato'].replace('_', ' ')} · "
                f"AFP {t['afp']} · {t['salud']}")
+    with st.expander("Tu contrato"):
+        pdf = _llamar(cliente.pdf_contrato, wid)
+        if pdf:
+            st.download_button(
+                "Descargar PDF", data=pdf, file_name=f"contrato_{wid}.pdf",
+                mime="application/pdf", key=f"descarga-contrato-{wid}",
+            )
+            st.pdf(pdf, height=640, key=f"contrato-{wid}")
     col_a, col_b = st.columns(2)
     with col_a:
         st.subheader("Haberes")

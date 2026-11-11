@@ -16,9 +16,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from api.deps import Analista
 from fuentes import listar
-from fuentes.buk import BukConector
+from fuentes.buk import ErrorBuk
 from fuentes.contratos import contratos_vigentes
 from fuentes.excel import plantilla_bytes
+from fuentes.lectura_contrato import proponer_desde_pdf
 from fuentes.muestras import listar_muestras, obtener_muestra
 from fuentes.protocolo import ErrorCarga
 from harness import almacen, datos
@@ -27,8 +28,9 @@ from harness.config import Settings
 from harness.ingest import asegurar_indice, estado_indice
 from harness.llm_factory import crear_embeddings, descripcion
 from harness.runtime import ejecutar
-from rrhh import recalculo
+from rrhh import buk, recalculo
 from rrhh.bandeja import abrir_casos_faltantes, decidir, listar_bandeja, listar_casos, obtener_caso
+from rrhh.pdf_contrato import pdf_de_contrato
 from rrhh.pdf_liquidacion import pdf_borrador
 from rrhh.solicitudes import (
     abrir_desde_consulta,
@@ -42,6 +44,7 @@ from rrhh.servicio import (
     explicar_caso,
     procesar_anexo,
     procesar_contrato,
+    procesar_documento_compartido,
     procesar_excel,
     procesar_pdf_liquidacion,
 )
@@ -103,6 +106,7 @@ class Consulta(BaseModel):
 class NuevoBorrador(BaseModel):
     worker_id: str = Field(min_length=1)
     periodo: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
+    autor: str = ""  # se ignora: el autor es el analista autenticado
 
 
 class Haber(BaseModel):
@@ -114,10 +118,17 @@ class AjusteBorrador(BaseModel):
     haberes_imponibles: list[Haber]
     haberes_no_imponibles: list[Haber] = []
     nota: str = ""
+    autor: str = ""
 
 
 class Emision(BaseModel):
     nota: str = Field(min_length=1)
+    version: int = Field(ge=1, description="La versión que el analista revisó en el diff.")
+    autor: str = ""
+
+
+class CargaBuk(BaseModel):
+    periodo: str = Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class RespuestaAnalista(BaseModel):
@@ -211,10 +222,10 @@ async def avatar_yo(analista: Analista, archivo: UploadFile = File(...)) -> dict
     return almacen.actualizar_analista(analista["id"], avatar=data_url)
 
 
-
 @app.get("/conectores")
 def conectores(_analista: Analista) -> list[dict]:
-    return [{"nombre": c.nombre, "disponible": c.disponible, "detalle": c.detalle} for c in listar()]
+    return [{"nombre": c.nombre, "disponible": c.disponible, "detalle": c.detalle, "modo": getattr(c, "modo", None)}
+            for c in listar()]
 
 
 # ------------------------------------------------------------------ agente e índice
@@ -258,6 +269,27 @@ def trabajador(worker_id: str, periodo: str | None = None) -> dict:
     if ficha is None:
         raise HTTPException(404, "No existe el trabajador.")
     return {"ficha": ficha, "periodos": datos.periodos_disponibles(worker_id)}
+
+
+@app.get("/trabajadores/{worker_id}/contrato.pdf")
+def pdf_contrato(worker_id: str) -> Response:
+    if datos.obtener_trabajador(worker_id) is None:
+        raise HTTPException(404, "No existe el trabajador.")
+    texto = almacen.contenido_contrato(worker_id)
+    if not texto:
+        raise HTTPException(404, "Este trabajador no tiene contrato.")
+    return Response(
+        content=pdf_de_contrato(texto, worker_id), media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="contrato_{worker_id}.pdf"'},
+    )
+
+
+@app.get("/trabajadores/{worker_id}/documentos-contrato")
+def documentos_contrato(worker_id: str, _analista: Analista) -> list[dict]:
+    """Contrato y anexos con el texto que ve el agente. Orden: contrato primero, luego anexos por fecha."""
+    if datos.obtener_trabajador(worker_id) is None:
+        raise HTTPException(404, "No existe el trabajador.")
+    return almacen.documentos_de_contrato(worker_id, con_contenido=True)
 
 
 @app.get("/trabajadores/{worker_id}/liquidacion")
@@ -330,7 +362,7 @@ def solicitud(solicitud_id: str, _analista: Analista) -> dict:
 @app.post("/solicitudes/{solicitud_id}/respuesta")
 def respuesta_de_analista(solicitud_id: str, cuerpo: RespuestaAnalista, analista: Analista) -> dict:
     try:
-        return responder_solicitud(solicitud_id, cuerpo.respuesta)
+        return responder_solicitud(solicitud_id, cuerpo.respuesta, analista["nombre"])
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -381,7 +413,7 @@ def borradores(_analista: Analista) -> list[dict]:
 def nuevo_borrador(cuerpo: NuevoBorrador, analista: Analista) -> dict:
     """Recalcula la liquidación emitida y guarda la propuesta como borrador."""
     try:
-        return recalculo.generar(cuerpo.worker_id, cuerpo.periodo)
+        return recalculo.generar(cuerpo.worker_id, cuerpo.periodo, analista["nombre"])
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
 
@@ -406,6 +438,7 @@ def ajustar_borrador(borrador_id: str, cuerpo: AjusteBorrador, analista: Analist
             [h.model_dump() for h in cuerpo.haberes_imponibles],
             [h.model_dump() for h in cuerpo.haberes_no_imponibles],
             cuerpo.nota,
+            analista["nombre"],
         )
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
@@ -425,11 +458,31 @@ def pdf_de_borrador(borrador_id: str, _analista: Analista) -> Response:
 def emitir_borrador(borrador_id: str, cuerpo: Emision, analista: Analista) -> dict:
     """La propuesta reemplaza a la liquidación vigente y el caso queda como corregido."""
     try:
-        return recalculo.emitir(borrador_id, cuerpo.nota)
+        return recalculo.emitir(borrador_id, cuerpo.nota, cuerpo.version, analista["nombre"])
     except LookupError as e:
         raise HTTPException(404, str(e)) from e
     except ValueError as e:
         raise HTTPException(409, str(e)) from e
+
+
+@app.get("/borradores/{borrador_id}/historial")
+def historial_de_borrador(borrador_id: str, _analista: Analista) -> list[dict]:
+    """Bitácora de la liquidación del periodo. Solo se agregan eventos; nada se borra."""
+    try:
+        return recalculo.historial(borrador_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/borradores/{borrador_id}/diff")
+def diff_de_borrador(borrador_id: str, _analista: Analista, base: str = "emitida") -> dict:
+    """Diff de la versión actual contra la liquidación emitida o contra una versión anterior (base=2)."""
+    try:
+        return recalculo.comparar(borrador_id, base)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 # ------------------------------------------------------------------ RR.HH.: datos
@@ -442,6 +495,11 @@ def liquidaciones(_analista: Analista) -> list[dict]:
 @app.get("/contratos")
 def contratos(_analista: Analista) -> list[dict]:
     return contratos_vigentes()
+
+
+@app.get("/documentos-compartidos")
+def docs_compartidos(_analista: Analista) -> list[dict]:
+    return almacen.documentos_compartidos()
 
 
 @app.get("/plantilla/liquidaciones.xlsx")
@@ -470,7 +528,7 @@ def muestra(muestra_id: str, _analista: Analista) -> Response:
 
 # ------------------------------------------------------------------ RR.HH.: cargas
 @app.post("/cargas/excel")
-async def carga_excel(archivo: UploadFile = File(...)) -> dict:
+async def carga_excel(_analista: Analista, archivo: UploadFile = File(...)) -> dict:
     try:
         resumen = procesar_excel(await archivo.read())
     except ErrorCarga as e:
@@ -479,7 +537,7 @@ async def carga_excel(archivo: UploadFile = File(...)) -> dict:
 
 
 @app.post("/cargas/pdf-liquidacion")
-async def carga_pdf_liquidacion(archivo: UploadFile = File(...)) -> dict:
+async def carga_pdf_liquidacion(_analista: Analista, archivo: UploadFile = File(...)) -> dict:
     try:
         resumen = procesar_pdf_liquidacion(await archivo.read())
     except ErrorCarga as e:
@@ -487,8 +545,39 @@ async def carga_pdf_liquidacion(archivo: UploadFile = File(...)) -> dict:
     return {"resumen": resumen, "casos": listar_casos()}
 
 
+@app.post("/cargas/contrato/leer")
+async def leer_contrato(
+    _analista: Analista,
+    worker_id: str = Form(...),
+    vigente_desde: str | None = Form(None),
+    archivo: UploadFile = File(...),
+) -> dict:
+    """Propone campos de ficha desde el PDF. No guarda el documento ni cambia la ficha."""
+    try:
+        return proponer_desde_pdf(await archivo.read(), worker_id, "contrato", vigente_desde)
+    except ErrorCarga as e:
+        raise _error_carga(e) from e
+
+
+@app.post("/cargas/anexo/leer")
+async def leer_anexo(
+    _analista: Analista,
+    worker_id: str = Form(...),
+    vigente_desde: str | None = Form(None),
+    descripcion: str = Form(""),
+    archivo: UploadFile = File(...),
+) -> dict:
+    """Propone campos de ficha desde el anexo. No guarda el documento ni cambia la ficha."""
+    try:
+        return proponer_desde_pdf(
+            await archivo.read(), worker_id, "anexo", vigente_desde, descripcion)
+    except ErrorCarga as e:
+        raise _error_carga(e) from e
+
+
 @app.post("/cargas/pdf")
 async def carga_contrato(
+    _analista: Analista,
     worker_id: str = Form(...),
     vigente_desde: str | None = Form(None),
     cambios: str = Form(""),
@@ -503,6 +592,7 @@ async def carga_contrato(
 
 @app.post("/cargas/anexo")
 async def carga_anexo(
+    _analista: Analista,
     worker_id: str = Form(...),
     vigente_desde: str | None = Form(None),
     descripcion: str = Form(""),
@@ -516,10 +606,38 @@ async def carga_anexo(
     return {"resumen": resumen, "contratos": contratos_vigentes()}
 
 
-@app.post("/cargas/buk")
-def carga_buk() -> dict:
+@app.post("/cargas/documento-compartido")
+async def carga_documento_compartido(
+    _analista: Analista,
+    doc_type: str = Form("otro"),
+    descripcion: str = Form(""),
+    archivo: UploadFile = File(...),
+) -> dict:
     try:
-        BukConector().cargar()
+        resumen = procesar_documento_compartido(
+            await archivo.read(), archivo.filename or "documento.md", doc_type, descripcion)
     except ErrorCarga as e:
-        raise HTTPException(503, str(e)) from e
-    return {"resumen": "Buk cargó datos."}
+        raise _error_carga(e) from e
+    return {"resumen": resumen, "documentos": almacen.documentos_compartidos()}
+
+
+@app.post("/cargas/buk")
+def carga_buk(cuerpo: CargaBuk, _analista: Analista) -> dict:
+    """Trae de Buk los trabajadores activos y las liquidaciones del mes, y abre los casos."""
+    try:
+        return buk.sincronizar(cuerpo.periodo)
+    except ErrorBuk as e:
+        raise HTTPException(502, str(e)) from e
+    except ErrorCarga as e:
+        raise _error_carga(e) from e
+
+
+@app.post("/webhooks/buk", status_code=202)
+def webhook_buk(evento: dict) -> dict:
+    """Aviso de Buk (alta, cambio o término de un trabajador). Se vuelve a pedir su ficha."""
+    try:
+        return buk.aplicar_evento(evento)
+    except ErrorBuk as e:
+        raise HTTPException(502, str(e)) from e
+    except ErrorCarga as e:
+        raise _error_carga(e) from e

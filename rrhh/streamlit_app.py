@@ -6,8 +6,9 @@ Habla solo con la API (API_BASE_URL). No abre el motor ni la base de datos.
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -141,29 +142,51 @@ def zona_pedidos(item: dict) -> None:
     if not solicitudes:
         st.caption("La detectó el sistema al cargar la liquidación. El trabajador no ha pedido revisión.")
         return
-    st.markdown("**Lo que pidió el trabajador**")
-    for solicitud in solicitudes:
-        with st.container(border=True):
-            st.caption(f"{solicitud['id']} · {_motivos(solicitud)} · {_titulo(solicitud['estado'])}")
-            for mensaje in solicitud["mensajes"]:
-                with st.chat_message("user"):
-                    st.write(mensaje["texto"])
-            if len(solicitud["mensajes"]) > 1:
-                st.caption(f"{len(solicitud['mensajes'])} mensajes del mismo día sobre el mismo tema, "
-                           "unidos en una solicitud.")
-            with st.expander("Resumen del agente"):
-                st.markdown((solicitud.get("resumen") or "").replace("$", r"\$"))
-            if solicitud["estado"] == "respondida" and solicitud.get("respuesta"):
-                st.success(f"Respondida: {solicitud['respuesta']}")
-
     abiertas = [s for s in solicitudes if s["estado"] == "pendiente"]
-    if not abiertas:
-        return
-    with st.form(f"respuesta-{item['id']}"):
-        texto = st.text_area("Respuesta al trabajador", placeholder="Qué revisaste y qué tiene que saber.")
-        if st.form_submit_button("Enviar respuesta", type="primary"):
-            if all(_llamar(cliente.responder_solicitud, s["id"], texto) is not None for s in abiertas):
-                st.rerun()
+    st.markdown("**Conversación con el agente**")
+    st.caption(" · ".join(f"{s['id']} {_titulo(s['estado']).lower()} ({_motivos(s).lower()})"
+                          for s in solicitudes))
+    with st.container(border=True):
+        with st.container(height=460, autoscroll=True, border=False):
+            for quien, instante, texto in _hilo(solicitudes):
+                with st.chat_message(**_AUTOR[quien]):
+                    st.caption(f"{_ETIQUETA_AUTOR[quien]} · {_hora(instante)}")
+                    st.markdown(texto.replace("$", r"\$"))
+        if abiertas:
+            respuesta = st.chat_input("Responde al trabajador como RR.HH.…", key=f"respuesta-{item['id']}")
+            if respuesta and respuesta.strip():
+                if all(_llamar(cliente.responder_solicitud, s["id"], respuesta) is not None for s in abiertas):
+                    st.rerun()
+        else:
+            st.caption("Respondida. Si el trabajador vuelve a escribir, la conversación sigue aquí.")
+
+
+_AUTOR = {"trabajador": {"name": "user"}, "agente": {"name": "assistant"},
+          "rrhh": {"name": "RR.HH.", "avatar": ":material/support_agent:"}}
+_ETIQUETA_AUTOR = {"trabajador": "Trabajador", "agente": "Agente", "rrhh": "RR.HH."}
+
+
+def _hilo(solicitudes: list[dict]) -> list[tuple[str, str, str]]:
+    """Todas las solicitudes de la liquidación en un solo hilo, en orden de llegada."""
+    hilo = []
+    for solicitud in solicitudes:
+        for mensaje in solicitud["mensajes"]:
+            hilo.append(("trabajador", mensaje["creado"], mensaje["texto"]))
+            if mensaje.get("agente"):
+                hilo.append(("agente", mensaje["creado"], mensaje["agente"]))
+        if solicitud["estado"] == "respondida" and solicitud.get("respuesta"):
+            hilo.append(("rrhh", solicitud.get("respondido") or solicitud["creado"], solicitud["respuesta"]))
+    return sorted(hilo, key=lambda paso: paso[1])
+
+
+def _hora(instante: str) -> str:
+    try:
+        return datetime.fromisoformat(instante).astimezone(_CHILE).strftime("%d-%m %H:%M")
+    except (TypeError, ValueError):
+        return ""
+
+
+_CHILE = ZoneInfo("America/Santiago")
 
 
 def zona_caso(caso: dict) -> None:
@@ -244,25 +267,21 @@ def zona_borrador(caso: dict) -> None:
         st.caption("El motor recalcula la liquidación con la ficha vigente y los parámetros del periodo. "
                    "Queda como borrador hasta que la emitas.")
         if st.button("Generar propuesta corregida", key=f"generar-{caso['id']}", type="primary"):
-            if _llamar(cliente.generar_borrador, caso["worker_id"], caso["periodo"]) is not None:
+            if _llamar(cliente.generar_borrador, caso["worker_id"], caso["periodo"], _analista()) is not None:
                 st.rerun()
         return
 
     emitida = borrador["estado"] == "emitida"
+    version = borrador.get("version", 1)
     original, propuesta = borrador["original"], borrador["propuesta"]
     antes, despues, estado = st.columns([1, 1, 1])
     antes.metric("Líquido emitido", clp(original["liquido_a_pagar"]))
     despues.metric("Líquido propuesto", clp(propuesta["liquido_a_pagar"]),
                    delta=_delta(propuesta["liquido_a_pagar"] - original["liquido_a_pagar"]))
-    estado.badge("Emitida" if emitida else f"Borrador v{borrador.get('version', 1)}",
-                 color="green" if emitida else "orange")
-    if borrador.get("ajustes"):
-        st.dataframe([{
-            "Concepto": a["concepto"], "Emitido": clp(a["emitido"]), "Propuesto": clp(a["propuesto"]),
-            "Diferencia": clp(a["diferencia"]), "Motivo": a["motivo"],
-        } for a in borrador["ajustes"]], hide_index=True, use_container_width=True)
-    else:
-        st.caption("El recálculo no cambia ningún monto.")
+    estado.badge("Emitida" if emitida else f"Borrador v{version}", color="green" if emitida else "orange")
+
+    zona_diff(borrador)
+    zona_trazabilidad(borrador)
 
     pdf = _llamar(cliente.pdf_borrador, borrador["id"])
     if pdf is not None:
@@ -297,16 +316,118 @@ def zona_borrador(caso: dict) -> None:
                           for _, f in filas_validas.iterrows() if f["Tipo"] == "Imponible"]
             no_imponibles = [{"concepto": f["Concepto"], "monto": int(f["Monto"])}
                              for _, f in filas_validas.iterrows() if f["Tipo"] != "Imponible"]
-            if _llamar(cliente.ajustar_borrador, borrador["id"], imponibles, no_imponibles, nota_ajuste) is not None:
+            if _llamar(cliente.ajustar_borrador, borrador["id"], imponibles, no_imponibles, nota_ajuste,
+                       _analista()) is not None:
                 st.rerun()
 
-    with st.form(f"emitir-{borrador['id']}"):
+    with st.form(f"emitir-{borrador['id']}-{version}"):
+        st.markdown(f"**Emitir la versión v{version}**")
+        st.caption("Reemplaza a la liquidación vigente. La anterior queda guardada en la bitácora.")
+        revisado = st.checkbox(f"Revisé los cambios de la versión v{version} contra la liquidación emitida")
         nota = st.text_input("Nota de emisión", placeholder="Ej.: Se aplica tope imponible y se devuelve la diferencia.")
         if st.form_submit_button("Emitir liquidación", type="primary"):
-            if not nota.strip():
+            if not revisado:
+                st.error("Marca que revisaste el diff antes de emitir.")
+            elif not nota.strip():
                 st.error("Escribe una nota para emitir.")
-            elif _llamar(cliente.emitir_borrador, borrador["id"], nota) is not None:
+            elif _llamar(cliente.emitir_borrador, borrador["id"], nota, version, _analista()) is not None:
                 st.rerun()
+
+
+def zona_diff(borrador: dict) -> None:
+    """Qué cambia, como un diff de código: en rojo lo que sale, en verde lo que entra."""
+    version = borrador.get("version", 1)
+    bases = ["emitida"] + [str(n) for n in range(version - 1, 0, -1)]
+    base = st.selectbox(
+        "Comparar con", bases, key=f"base-{borrador['id']}-{version}",
+        format_func=lambda b: "Liquidación emitida" if b == "emitida" else f"Propuesta v{b}",
+    )
+    diff = _llamar(cliente.diff_borrador, borrador["id"], base)
+    if diff is None:
+        return
+    simple = diff["en_simple"]
+    with st.container(border=True):
+        st.caption("EN SIMPLE")
+        st.markdown(f"**{simple['titular']}**".replace("$", r"\$"))
+        st.markdown(f"Líquido a pagar: {clp(simple['liquido_antes'])} → **{clp(simple['liquido_despues'])}**"
+                    .replace("$", r"\$"))
+        explicados = set()
+        for punto in simple["puntos"]:
+            icono = (":green[:material/arrow_upward:]" if punto["favorece_al_trabajador"]
+                     else ":red[:material/arrow_downward:]")
+            st.markdown(f"{icono} {punto['texto']}".replace("$", r"\$"))
+            if punto.get("por_que") and punto["por_que"] not in explicados:
+                explicados.add(punto["por_que"])
+                st.caption(f"Por qué: {punto['por_que']}".replace("$", r"\$"))
+        st.caption(f"{simple['pie']} Flecha verde: el cambio favorece al trabajador; roja: lo perjudica.")
+    n = len(diff["cambios"])
+    with st.expander(f"Ver detalle técnico (diff · {n} {'concepto' if n == 1 else 'conceptos'})"):
+        st.code(diff["texto"], language="diff", line_numbers=False)
+        if borrador.get("ajustes"):
+            st.caption("Motivo técnico de cada cambio respecto de la liquidación emitida")
+            st.dataframe([{
+                "Concepto": a["concepto"], "Emitido": clp(a["emitido"]), "Propuesto": clp(a["propuesto"]),
+                "Diferencia": clp(a["diferencia"]), "Motivo": a["motivo"],
+            } for a in borrador["ajustes"]], hide_index=True, use_container_width=True)
+
+
+_ACCION = {
+    "propuesta_generada": "Propuesta generada",
+    "propuesta_ajustada": "Propuesta ajustada",
+    "liquidacion_emitida": "Liquidación emitida",
+    "liquidacion_reemplazada": "Liquidación vigente reemplazada",
+}
+
+
+def zona_trazabilidad(borrador: dict) -> None:
+    eventos = _llamar(cliente.historial_borrador, borrador["id"]) or []
+    with st.expander(f"Trazabilidad ({len(eventos)} {'evento' if len(eventos) == 1 else 'eventos'})"):
+        if not eventos:
+            st.caption("Sin eventos registrados.")
+            return
+        st.caption("Cada propuesta, ajuste y emisión queda registrado con quién lo hizo y una copia completa "
+                   "de la liquidación. Los eventos no se editan ni se borran.")
+        st.dataframe([{
+            "Cuándo": _hora(e["cuando"]),
+            "Quién": e["autor"],
+            "Acción": _ACCION.get(e["accion"], e["accion"]),
+            "Versión": f"v{e['datos']['version']}" if e["datos"].get("version") else "—",
+            "Líquido": clp(e["datos"].get("liquido") or (e["datos"].get("nueva") or {}).get("liquido_a_pagar")),
+            "Detalle": _detalle_evento(e),
+        } for e in reversed(eventos)], hide_index=True, use_container_width=True)
+
+
+def _detalle_evento(evento: dict) -> str:
+    datos = evento["datos"]
+    if evento["accion"] == "liquidacion_reemplazada":
+        anterior = datos.get("anterior") or {}
+        return (f"Antes {clp(anterior.get('liquido_a_pagar'))} ({datos.get('origen_anterior')}). "
+                + (datos.get("nota") or ""))
+    partes = []
+    if datos.get("cambios") is not None:
+        partes.append(", ".join(c["concepto"] for c in datos["cambios"]) or "sin cambios de montos")
+    if datos.get("nota"):
+        partes.append(datos["nota"])
+    if datos.get("reemplaza_version"):
+        partes.append(f"Reemplaza la v{datos['reemplaza_version']} ({datos.get('estado_previo')})")
+    return " · ".join(partes)
+
+
+def _analista() -> str:
+    perfil = st.session_state.get("perfil_analista") or {}
+    return perfil.get("nombre") or "Analista RR.HH."
+
+
+def _asegurar_sesion() -> bool:
+    """Login del analista demo (o ANALISTA_EMAIL / ANALISTA_PASSWORD)."""
+    if st.session_state.get("perfil_analista"):
+        return True
+    perfil = _llamar(cliente.autenticar)
+    if perfil is None:
+        st.error("No se pudo iniciar sesión en la API. Revisa ANALISTA_EMAIL y ANALISTA_PASSWORD.")
+        return False
+    st.session_state["perfil_analista"] = perfil
+    return True
 
 
 _ORIGEN = {"base": "Sistema", "migrado": "Sistema", "excel": "Excel", "pdf": "PDF",
@@ -466,23 +587,12 @@ def zona_sectores() -> None:
     )
 
 
-
-def _asegurar_sesion() -> bool:
-    """Login del analista demo (o ANALISTA_EMAIL / ANALISTA_PASSWORD)."""
-    if st.session_state.get("perfil_analista"):
-        return True
-    perfil = _llamar(cliente.autenticar)
-    if perfil is None:
-        st.error("No se pudo iniciar sesión en la API. Revisa ANALISTA_EMAIL y ANALISTA_PASSWORD.")
-        return False
-    st.session_state["perfil_analista"] = perfil
-    return True
-
-
 def main() -> None:
     if not _asegurar_sesion():
         return
     perfil = st.session_state["perfil_analista"]
+    st.sidebar.markdown(f"**{perfil['nombre']}**")
+    st.sidebar.caption(perfil.get("cargo") or perfil.get("email") or "")
     st.title("Centro de control de RR.HH.")
     st.caption(f"Carga y decisiones pasan por la API en {base_url()}.")
     bandeja, sectores, carga, conectores = st.tabs(["Bandeja", "Sectores", "Cargar", "Conectores"])

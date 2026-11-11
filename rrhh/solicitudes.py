@@ -50,7 +50,7 @@ def abrir_desde_consulta(worker_id: str, pregunta: str, informe: dict | None) ->
         "tipo": tipo,
         "periodo": periodo,
         "pregunta": pregunta.strip(),
-        "mensajes": [{"texto": pregunta.strip(), "creado": ahora}],
+        "mensajes": [{"texto": pregunta.strip(), "creado": ahora, "agente": _resumen(informe, motivos)}],
         "motivos": motivos,
         "resumen": _resumen(informe, motivos),
         "hallazgos": hallazgos,
@@ -75,10 +75,10 @@ def _abierta_del_dia(worker_id: str, periodo: str | None, tipo: str, ahora: str)
 
 def _sumar(previa: dict, pregunta: str, motivos: list[str], informe: dict | None, hallazgos: list[dict],
            estado: str, ahora: str) -> dict:
-    mensajes = list(previa.get("mensajes") or [{"texto": previa["pregunta"], "creado": previa["creado"]}])
-    if pregunta.strip() not in {m["texto"] for m in mensajes}:
-        mensajes.append({"texto": pregunta.strip(), "creado": ahora})
+    mensajes = _mensajes(previa)
     unidos = [m for m in ("trabajador", "agente") if m in set(previa.get("motivos") or []) | set(motivos)]
+    if pregunta.strip() not in {m["texto"] for m in mensajes}:
+        mensajes.append({"texto": pregunta.strip(), "creado": ahora, "agente": _resumen(informe, unidos)})
     previa.update(
         mensajes=mensajes,
         motivos=unidos,
@@ -139,13 +139,18 @@ def estadisticas() -> list[dict]:
     return sorted(filas.values(), key=lambda f: (-f["solicitudes"], f["area"]))
 
 
-def responder(solicitud_id: str, texto: str) -> dict:
+def responder(solicitud_id: str, texto: str, autor: str = "") -> dict:
     if not str(texto).strip():
         raise ValueError("La respuesta para el trabajador no puede ir vacía.")
     solicitud = almacen.obtener_solicitud(solicitud_id)
     if solicitud is None or solicitud["estado"] == "propuesta":
         raise ValueError(f"No existe la solicitud {solicitud_id}.")
-    solicitud.update(estado="respondida", respuesta=str(texto).strip(), respondido=_ahora())
+    solicitud.update(
+        estado="respondida",
+        respuesta=str(texto).strip(),
+        respondido=_ahora(),
+        respondido_por=(autor or "").strip() or None,
+    )
     return almacen.guardar_solicitud(solicitud)
 
 
@@ -154,9 +159,18 @@ def _visible(solicitud: dict, fichas: dict) -> dict:
     visible["area"] = _area_de(solicitud, fichas)
     visible["periodo"] = _periodo_de(solicitud)
     visible["tipo"] = _tipo_de(solicitud)
-    visible["mensajes"] = solicitud.get("mensajes") or [{"texto": solicitud["pregunta"],
-                                                          "creado": solicitud["creado"]}]
+    visible["mensajes"] = _mensajes(solicitud)
     return visible
+
+
+def _mensajes(solicitud: dict) -> list[dict]:
+    """Lo que escribió el trabajador y lo que le contestó el agente, mensaje por mensaje. Las
+    solicitudes antiguas solo guardaban la última respuesta del agente."""
+    mensajes = [dict(m) for m in solicitud.get("mensajes")
+                or [{"texto": solicitud["pregunta"], "creado": solicitud["creado"]}]]
+    if not mensajes[-1].get("agente"):
+        mensajes[-1]["agente"] = solicitud.get("resumen") or ""
+    return mensajes
 
 
 def _area_de(solicitud: dict, fichas: dict) -> str:

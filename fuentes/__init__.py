@@ -1,4 +1,4 @@
-"""Orígenes de datos de RR.HH.: Excel, PDF y Buk (preparado)."""
+"""Orígenes de datos de RR.HH.: Excel, PDF y Buk."""
 from .buk import BukConector
 from .excel import ExcelConector
 from .liquidacion_pdf import LiquidacionPdfConector
