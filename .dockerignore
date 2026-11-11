@@ -8,3 +8,4 @@ data/rrhh_workspace/
 data/*.db
 .venv/
 venv/
+web/

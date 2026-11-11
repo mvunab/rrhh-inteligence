@@ -1,5 +1,6 @@
 # Uso:
-#   docker compose up --build                       -> base :5432, API :8000, trabajador :8501, RR.HH. :8502
+#   docker compose up --build                       -> base :5432, API :8000, trabajador :8501, RR.HH. :8502,
+#                                                      RR.HH. en React :8503
 #   docker compose --profile ollama up --build      -> ademas levanta un Ollama dentro de Docker
 #   docker compose run --rm --no-deps app pytest    -> tests (SQLite temporal y API en proceso: sin red)
 #
@@ -83,6 +84,16 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+    restart: unless-stopped
+
+  web:
+    build: ./web
+    image: liquidaciones-agent-web:latest
+    ports:
+      - "8503:80"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
 
   ollama:
