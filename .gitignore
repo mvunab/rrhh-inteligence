@@ -7,3 +7,7 @@ data/*.db
 .venv/
 venv/
 .DS_Store
+
+# Portales Streamlit: no van a Render (el front desplegado es web/ React).
+app/
+rrhh/streamlit_app.py
