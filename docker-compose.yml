@@ -1,12 +1,11 @@
 # Uso:
-#   docker compose up --build                       -> base :5432, API :8000, trabajador :8501, RR.HH. :8502,
-#                                                      RR.HH. en React :8503
+#   docker compose up --build                       -> base :5432, API :8000, RR.HH. React :8503
 #   docker compose --profile ollama up --build      -> ademas levanta un Ollama dentro de Docker
-#   docker compose run --rm --no-deps app pytest    -> tests (SQLite temporal y API en proceso: sin red)
+#   docker compose run --rm --no-deps api pytest    -> tests (SQLite temporal y API en proceso: sin red)
 #
 # Una sola fuente de verdad: la base PostgreSQL. La API es el único proceso que la abre, junto con
-# el índice de Chroma. Las dos interfaces hablan solo con la API. Los archivos de data/ son la carga
-# inicial de una base vacía.
+# el índice de Chroma. El front React habla solo con la API. Los archivos de data/ son la carga
+# inicial de una base vacía. Los portales Streamlit quedaron fuera del repo (ver .gitignore).
 services:
   db:
     image: postgres:16-alpine
@@ -49,37 +48,6 @@ services:
     command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/salud', timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    restart: unless-stopped
-
-  app:
-    build: .
-    image: liquidaciones-agent:latest
-    ports:
-      - "8501:8501"
-    environment:
-      API_BASE_URL: http://api:8000
-    depends_on:
-      api:
-        condition: service_healthy
-    restart: unless-stopped
-
-  rrhh:
-    build: .
-    image: liquidaciones-agent:latest
-    ports:
-      - "8502:8502"
-    environment:
-      API_BASE_URL: http://api:8000
-    depends_on:
-      api:
-        condition: service_healthy
-    command: ["streamlit", "run", "rrhh/streamlit_app.py", "--server.port=8502", "--server.address=0.0.0.0", "--server.headless=true"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8502/_stcore/health', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
