@@ -38,6 +38,17 @@ def base(_base_sembrada, tmp_path, monkeypatch):
     almacen.motor().dispose()
 
 
+def autenticar_api(cliente):
+    """Login del analista demo; deja el Bearer en el TestClient."""
+    from harness.auth import email_demo, password_demo
+
+    almacen.asegurar_analistas()
+    res = cliente.post("/auth/login", json={"email": email_demo(), "password": password_demo()})
+    assert res.status_code == 200, res.text
+    cliente.headers["Authorization"] = f"Bearer {res.json()['token']}"
+    return res.json()["analista"]
+
+
 @pytest.fixture(scope="session")
 def params():
     return cargar_parametros()

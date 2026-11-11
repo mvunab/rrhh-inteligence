@@ -93,6 +93,21 @@ borradores = Table(
     Column("datos", _JSON, nullable=False),
 )
 
+analistas = Table(
+    "analistas", meta,
+    Column("id", String(36), primary_key=True),
+    Column("email", String(120), nullable=False, unique=True),
+    Column("password_hash", String(200), nullable=False),
+    Column("nombre", String(120), nullable=False),
+    Column("cargo", String(120), nullable=False, default=""),
+    Column("area", String(120), nullable=False, default=""),
+    Column("telefono", String(40), nullable=False, default=""),
+    Column("avatar", Text, nullable=True),
+    Column("creado", DateTime(timezone=True), nullable=False),
+)
+
+
+
 # Campos de la ficha que un contrato o un anexo puede cambiar.
 CAMPOS_FICHA = {
     "afp": str, "salud": str, "tipo_contrato": str, "fecha_termino": str, "jornada": str,
@@ -397,3 +412,76 @@ def guardar_borrador(borrador: dict) -> dict:
             id=borrador["id"], worker_id=borrador["worker_id"], periodo=borrador["periodo"],
             estado=borrador["estado"], datos=borrador))
     return borrador
+
+# ------------------------------------------------------------------ analistas RR.HH.
+def _fila_analista(fila) -> dict:
+    return {
+        "id": fila.id,
+        "email": fila.email,
+        "nombre": fila.nombre,
+        "cargo": fila.cargo or "",
+        "area": fila.area or "",
+        "telefono": fila.telefono or "",
+        "avatar": fila.avatar,
+        "creado": _iso(fila.creado),
+    }
+
+
+def asegurar_analistas() -> None:
+    """Si no hay analistas, deja uno de demostración (correo y clave en AUTH / .env)."""
+    from .auth import email_demo, hash_password, password_demo
+
+    with motor().begin() as cx:
+        if cx.execute(select(analistas.c.id).limit(1)).first() is not None:
+            return
+        cx.execute(insert(analistas).values(
+            id="A001",
+            email=email_demo().lower(),
+            password_hash=hash_password(password_demo()),
+            nombre="Paula Soto",
+            cargo="Analista de remuneraciones",
+            area="Recursos Humanos",
+            telefono="",
+            avatar=None,
+            creado=_ahora(),
+        ))
+
+
+def obtener_analista(analista_id: str) -> dict | None:
+    with motor().connect() as cx:
+        fila = cx.execute(select(analistas).where(analistas.c.id == analista_id)).first()
+    return _fila_analista(fila) if fila else None
+
+
+def obtener_analista_por_email(email: str) -> dict | None:
+    with motor().connect() as cx:
+        fila = cx.execute(select(analistas).where(analistas.c.email == email.lower().strip())).first()
+    if fila is None:
+        return None
+    return _fila_analista(fila) | {"password_hash": fila.password_hash}
+
+
+def actualizar_analista(analista_id: str, *, nombre: str | None = None, cargo: str | None = None,
+                        area: str | None = None, telefono: str | None = None,
+                        avatar: str | None | object = ...) -> dict:
+    """Actualiza campos del perfil. `avatar=...` (ellipsis) significa no tocar el avatar."""
+    actual = obtener_analista(analista_id)
+    if actual is None:
+        raise LookupError(f"No existe el analista {analista_id}.")
+    valores = {}
+    if nombre is not None:
+        valores["nombre"] = nombre.strip() or actual["nombre"]
+    if cargo is not None:
+        valores["cargo"] = cargo.strip()
+    if area is not None:
+        valores["area"] = area.strip()
+    if telefono is not None:
+        valores["telefono"] = telefono.strip()
+    if avatar is not ...:
+        valores["avatar"] = avatar
+    if not valores:
+        return actual
+    with motor().begin() as cx:
+        cx.execute(update(analistas).where(analistas.c.id == analista_id).values(**valores))
+    return obtener_analista(analista_id)  # type: ignore[return-value]
+

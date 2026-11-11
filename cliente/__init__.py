@@ -8,6 +8,7 @@ import httpx
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _cliente_fijo: httpx.Client | None = None
+_token: str | None = None
 
 
 class ErrorApi(Exception):
@@ -26,6 +27,26 @@ def usar_cliente(cliente: httpx.Client | None) -> None:
     _cliente_fijo = cliente
 
 
+def usar_token(token: str | None) -> None:
+    """Bearer para las rutas de RR.HH. None limpia la sesión."""
+    global _token
+    _token = token
+
+
+def autenticar(email: str | None = None, password: str | None = None) -> dict:
+    """Inicia sesión de analista y deja el token listo para las siguientes llamadas."""
+    from harness.auth import email_demo, password_demo
+
+    cuerpo = {
+        "email": email or os.environ.get("ANALISTA_EMAIL") or email_demo(),
+        "password": password or os.environ.get("ANALISTA_PASSWORD") or password_demo(),
+    }
+    respuesta = _pedir("POST", "/auth/login", json=cuerpo, con_auth=False)
+    datos = respuesta.json()
+    usar_token(datos["token"])
+    return datos["analista"]
+
+
 def _detalle(respuesta: httpx.Response) -> str:
     try:
         cuerpo = respuesta.json()
@@ -37,12 +58,15 @@ def _detalle(respuesta: httpx.Response) -> str:
     return str(detalle or respuesta.text or respuesta.status_code)
 
 
-def _pedir(metodo: str, ruta: str, *, timeout: float = 30, **kwargs) -> httpx.Response:
+def _pedir(metodo: str, ruta: str, *, timeout: float = 30, con_auth: bool = True, **kwargs) -> httpx.Response:
+    headers = dict(kwargs.pop("headers", {}) or {})
+    if con_auth and _token:
+        headers.setdefault("Authorization", f"Bearer {_token}")
     try:
         if _cliente_fijo is not None:
-            respuesta = _cliente_fijo.request(metodo, ruta, timeout=timeout, **kwargs)
+            respuesta = _cliente_fijo.request(metodo, ruta, timeout=timeout, headers=headers, **kwargs)
         else:
-            respuesta = httpx.request(metodo, f"{base_url()}{ruta}", timeout=timeout, **kwargs)
+            respuesta = httpx.request(metodo, f"{base_url()}{ruta}", timeout=timeout, headers=headers, **kwargs)
     except httpx.HTTPError as e:
         raise ErrorApi(f"La API no responde en {base_url()}: {e}") from e
     if respuesta.status_code >= 400:
@@ -77,6 +101,10 @@ def trabajador(worker_id: str, periodo: str | None = None) -> dict:
     """Ficha vigente al cierre del periodo (sin periodo, hoy) y los periodos con liquidación."""
     params = {"periodo": periodo} if periodo else None
     return _pedir("GET", f"/trabajadores/{worker_id}", params=params).json()
+
+
+def pdf_contrato(worker_id: str) -> bytes:
+    return _pedir("GET", f"/trabajadores/{worker_id}/contrato.pdf").content
 
 
 def liquidacion(worker_id: str, periodo: str | None = None) -> dict:
@@ -138,23 +166,33 @@ def borradores() -> list[dict]:
     return _pedir("GET", "/borradores").json()
 
 
-def generar_borrador(worker_id: str, periodo: str) -> dict:
-    return _pedir("POST", "/borradores", json={"worker_id": worker_id, "periodo": periodo}).json()
+def generar_borrador(worker_id: str, periodo: str, autor: str = "") -> dict:
+    return _pedir("POST", "/borradores", json={"worker_id": worker_id, "periodo": periodo, "autor": autor}).json()
 
 
 def ajustar_borrador(borrador_id: str, haberes_imponibles: list[dict], haberes_no_imponibles: list[dict],
-                     nota: str = "") -> dict:
+                     nota: str = "", autor: str = "") -> dict:
     return _pedir("PUT", f"/borradores/{borrador_id}", json={
         "haberes_imponibles": haberes_imponibles, "haberes_no_imponibles": haberes_no_imponibles, "nota": nota,
+        "autor": autor,
     }).json()
+
+
+def historial_borrador(borrador_id: str) -> list[dict]:
+    return _pedir("GET", f"/borradores/{borrador_id}/historial").json()
+
+
+def diff_borrador(borrador_id: str, base: str = "emitida") -> dict:
+    return _pedir("GET", f"/borradores/{borrador_id}/diff", params={"base": base}).json()
 
 
 def pdf_borrador(borrador_id: str) -> bytes:
     return _pedir("GET", f"/borradores/{borrador_id}/pdf").content
 
 
-def emitir_borrador(borrador_id: str, nota: str) -> dict:
-    return _pedir("POST", f"/borradores/{borrador_id}/emision", json={"nota": nota}).json()
+def emitir_borrador(borrador_id: str, nota: str, version: int, autor: str = "") -> dict:
+    return _pedir("POST", f"/borradores/{borrador_id}/emision",
+                  json={"nota": nota, "version": version, "autor": autor}).json()
 
 
 def plantilla() -> bytes:
@@ -183,6 +221,10 @@ def cargar_excel(nombre: str, contenido: bytes) -> dict:
 
 def cargar_pdf_liquidacion(nombre: str, contenido: bytes) -> dict:
     return _pedir("POST", "/cargas/pdf-liquidacion", files={"archivo": (nombre, contenido, "application/pdf")}).json()
+
+
+def sincronizar_buk(periodo: str) -> dict:
+    return _pedir("POST", "/cargas/buk", json={"periodo": periodo}, timeout=120).json()
 
 
 def cargar_contrato(worker_id: str, nombre: str, contenido: bytes, vigente_desde: str | None = None,
